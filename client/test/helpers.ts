@@ -16,15 +16,16 @@ export function chrootedFs(root: () => string) {
   return { promises };
 }
 
-/*  Git is looked up in fixed system directories only, ignoring the user's config (e.g. commit signing)  */
-const GIT_ENV = { ...process.env, PATH: '/usr/local/bin:/usr/bin:/bin', GIT_CONFIG_GLOBAL: '/dev/null' };
+/*  System Git by absolute path, ignoring the user's config (e.g. commit signing)  */
+const GIT = '/usr/bin/git';
+const GIT_ENV = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null' };
 
 export const gitCli = (cwd: string, ...args: string[]) =>
-  execFileSync('git', [ '-c', 'user.name=Remote', '-c', 'user.email=remote@test', '-c', 'commit.gpgsign=false', ...args ], { cwd, encoding: 'utf8', env: GIT_ENV }).trim();
+  execFileSync(GIT, [ '-c', 'user.name=Remote', '-c', 'user.email=remote@test', '-c', 'commit.gpgsign=false', ...args ], { cwd, encoding: 'utf8', env: GIT_ENV }).trim();
 
 /*  Smart-HTTP Git server (git http-backend as CGI) serving the bare repos below projectRoot, push enabled  */
 export async function startGitServer(projectRoot: string): Promise<{ server: Server; url: string }> {
-  const backend = path.join(execFileSync('git', [ '--exec-path' ], { encoding: 'utf8', env: GIT_ENV }).trim(), 'git-http-backend');
+  const backend = path.join(execFileSync(GIT, [ '--exec-path' ], { encoding: 'utf8', env: GIT_ENV }).trim(), 'git-http-backend');
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
     const cgi = spawn(backend, [], {
