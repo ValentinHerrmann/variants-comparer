@@ -49,10 +49,9 @@ export async function importZip(exercise: ExerciseConfig, variantIndex: number, 
 /*  Current files of a stored repository as ZIP (below an optional root folder)  */
 export async function zipRepo(exercise: ExerciseConfig, variantIndex: number, repoType: RepoType, root = '') {
   const dir = repoDir(exercise, variantIndex, repoType);
-  const files: Record<string, Uint8Array> = {};
-  for (const relPath of await listFilePaths(dir))
-    files[`${root}${relPath}`] = await fs.promises.readFile(`${dir}/${relPath}`) as Uint8Array;
-  return zipSync(files);
+  const paths = await listFilePaths(dir);
+  const contents = await Promise.all(paths.map((relPath) => fs.promises.readFile(`${dir}/${relPath}`) as Promise<Uint8Array>));
+  return zipSync(Object.fromEntries(paths.map((relPath, idx) => [ `${root}${relPath}`, contents[idx]! ])));
 }
 
 /*  Delete all downloaded/imported repositories of an exercise  */

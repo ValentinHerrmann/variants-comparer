@@ -87,7 +87,7 @@ function UrlInput({ id, value, placeholder, disabled, onChange }: {
 }
 
 /*  Stored state of one repository in browser storage  */
-function RepoBadge({ count, modified, disabled, onRemove }: { count: number | undefined; modified: number; disabled: boolean; onRemove: () => void }) {
+function RepoBadge({ count, modified, disabled, onRemove }: Readonly<{ count: number | undefined; modified: number; disabled: boolean; onRemove: () => void }>) {
   if (count === undefined)
     return <span className="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">not loaded</span>;
   return (
@@ -602,7 +602,7 @@ function ConfigurePage() {
           name ||= parsed.title?.trim() ?? '';
           if (!name)
             throw new Error('Please provide an exercise name first.');
-          const imported = await importArtemisExport({ ...currentExercise, exerciseName: name }, variantIndex, bytes, parsed,
+          const imported = await importArtemisExport({ ...currentExercise, exerciseName: name }, variantIndex, bytes, parsed, /*  NOSONAR: the first export may set the exercise name  */
             source ? undefined : variants[variantIndex]?.artemisUrl);
           updateCurrentExercise((ex) => ({
             ...ex,

@@ -42,12 +42,18 @@ export async function pathExists(filepath: string) {
   }
 }
 
+/*  Tolerates directories created concurrently by parallel writes into the same tree  */
 export async function mkdirp(dir: string) {
   let current = '';
   for (const part of dir.split('/').filter(Boolean)) {
     current += `/${part}`;
-    if (!(await pathExists(current)))
-      await pfs.mkdir(current);
+    try {
+      await pfs.mkdir(current); /*  NOSONAR: parent directories must exist before their children  */
+    }
+    catch (error) {
+      if ((error as { code?: string }).code !== 'EEXIST')
+        throw error;
+    }
   }
 }
 
@@ -99,18 +105,15 @@ export async function readRepo(exercise: ExerciseConfig, variantIndex: number, r
 
 /*  Paths of all files below dir (ignoring .git / node_modules) relative to baseDir, without reading their content  */
 export async function listFilePaths(dir: string, baseDir = dir): Promise<string[]> {
-  const paths: string[] = [];
-  for (const name of await pfs.readdir(dir)) {
-    if (ignoredDirs.has(name))
-      continue;
+  const names = (await pfs.readdir(dir)).filter((name) => !ignoredDirs.has(name));
+  const nested = await Promise.all(names.map(async (name): Promise<string[]> => {
     const fullPath = `${dir}/${name}`;
     const stat = await pfs.stat(fullPath);
     if (stat.isDirectory())
-      paths.push(...await listFilePaths(fullPath, baseDir));
-    else if (stat.isFile())
-      paths.push(fullPath.slice(baseDir.length + 1));
-  }
-  return paths;
+      return listFilePaths(fullPath, baseDir);
+    return stat.isFile() ? [ fullPath.slice(baseDir.length + 1) ] : [];
+  }));
+  return nested.flat();
 }
 
 /*  File counts of all stored repositories of an exercise (undefined = not stored)  */
@@ -118,12 +121,11 @@ export type RepoStatus = Array<Record<RepoType, number | undefined>>;
 
 export async function getRepoStatus(exercise: ExerciseConfig): Promise<RepoStatus> {
   return Promise.all(exercise.variants.map(async (_, index) => {
-    const counts = {} as Record<RepoType, number | undefined>;
-    for (const repoType of REPO_TYPES) {
+    const counts = await Promise.all(REPO_TYPES.map(async (repoType) => {
       const dir = repoDir(exercise, index, repoType);
-      counts[repoType] = (await pathExists(dir)) ? (await listFilePaths(dir)).length : undefined;
-    }
-    return counts;
+      return (await pathExists(dir)) ? (await listFilePaths(dir)).length : undefined;
+    }));
+    return Object.fromEntries(REPO_TYPES.map((repoType, idx) => [ repoType, counts[idx] ])) as Record<RepoType, number | undefined>;
   }));
 }
 

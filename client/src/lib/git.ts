@@ -52,7 +52,7 @@ export async function cloneExercise(exercise: ExerciseConfig, onProgress?: (done
     const destination = repoDir(exercise, job.index, job.repoType);
     const event = { variant: job.variant.label, repoType: job.repoType, destination };
     try {
-      await removeArtemisMeta(exercise, job.index);
+      await removeArtemisMeta(exercise, job.index); /*  NOSONAR: clones run one after another for progress reporting  */
       await cloneRepository(job.url, destination);
       events.push({ ...event, success: true, message: 'Cloned successfully' });
     }
@@ -87,7 +87,7 @@ async function restorePending(dir: string, branch: string, commit: string, basel
   await git.writeRef({ fs, dir, ref, value: baseline, force: true });
   for (const [ filepath, head, , stage ] of await git.statusMatrix({ fs, dir }))
     if (stage !== head)
-      await git.resetIndex({ fs, dir, filepath });
+      await git.resetIndex({ fs, dir, filepath }); /*  NOSONAR: index updates of one repo must not overlap  */
 }
 
 export type PushOutcome = 'unchanged' | 'pushed' | 'merged';

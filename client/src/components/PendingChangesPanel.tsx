@@ -45,9 +45,8 @@ export function PendingChangesPanel({ exercise, refreshToken, onWritten, onProbl
   const reload = useCallback(async () => {
     try {
       setStates(await Promise.all(exercise.variants.map(async (_, index) => {
-        const remotes = {} as Record<RepoType, string | undefined>;
-        for (const repoType of REPO_TYPES)
-          remotes[repoType] = await repoRemoteUrl(repoDir(exercise, index, repoType));
+        const urls = await Promise.all(REPO_TYPES.map((repoType) => repoRemoteUrl(repoDir(exercise, index, repoType))));
+        const remotes = Object.fromEntries(REPO_TYPES.map((repoType, idx) => [ repoType, urls[idx] ])) as Record<RepoType, string | undefined>;
         return { changes: await variantChanges(exercise, index), meta: await readArtemisMeta(exercise, index), remotes };
       })));
     }
@@ -78,7 +77,10 @@ export function PendingChangesPanel({ exercise, refreshToken, onWritten, onProbl
   };
 
   const labelOf = (index: number) => exercise.variants[index]?.label || `Variant ${index + 1}`;
-  const fileBase = (index: number) => `${slugify(exercise.exerciseName, 'exercise')}-${slugify(labelOf(index), `variant-${index + 1}`)}`;
+  const fileBase = (index: number) => {
+    const variantSlug = slugify(labelOf(index), `variant-${index + 1}`);
+    return `${slugify(exercise.exerciseName, 'exercise')}-${variantSlug}`;
+  };
 
   const downloadRepo = (index: number, repoType: RepoType) => run(async () => {
     downloadFile(`${fileBase(index)}-${repoType}.zip`, await zipRepo(exercise, index, repoType), 'application/zip');
@@ -90,8 +92,7 @@ export function PendingChangesPanel({ exercise, refreshToken, onWritten, onProbl
   const downloadArtemisZip = (index: number, meta: ArtemisMeta) => run(async () => {
     downloadFile(`${fileBase(index)}-artemis-export.zip`, await buildArtemisZip(exercise, index), 'application/zip');
     if (meta.via === 'zip') {
-      for (const repoType of REPO_TYPES)
-        await commitAll(repoDir(exercise, index, repoType), 'Downloaded as Artemis ZIP');
+      await Promise.all(REPO_TYPES.map((repoType) => commitAll(repoDir(exercise, index, repoType), 'Downloaded as Artemis ZIP')));
       await writeArtemisMeta(exercise, index, { ...meta, problemStatement: exercise.variants[index]?.markdown ?? '' });
     }
     return `${labelOf(index)}: Artemis ZIP downloaded. Import it in Artemis via "Import from file" (creates a new exercise).`;
@@ -108,7 +109,7 @@ export function PendingChangesPanel({ exercise, refreshToken, onWritten, onProbl
     setCommitAuthor(author);
     const outcomes: string[] = [];
     for (const repoType of request.repoTypes) {
-      const outcome = await pushRepo(exercise, request.variantIndex, repoType, request.message.trim(), author);
+      const outcome = await pushRepo(exercise, request.variantIndex, repoType, request.message.trim(), author); /*  NOSONAR: stop at the first failed push  */
       outcomes.push(`${repoType} ${outcome === 'merged' ? 'merged with remote changes and pushed' : outcome}`);
     }
     return `${labelOf(request.variantIndex)}: ${outcomes.join(', ')}.`;
@@ -122,8 +123,19 @@ export function PendingChangesPanel({ exercise, refreshToken, onWritten, onProbl
 
   const discardProblemStatement = (index: number, meta: ArtemisMeta) => onProblemStatement(index, meta.problemStatement);
 
+  const discardRepoFile = (index: number, repoType: RepoType, path: string) => run(async () => {
+    await discardFile(exercise, index, repoType, path);
+    return undefined;
+  });
+
+  const originLabel = (meta?: ArtemisMeta) => {
+    if (!meta)
+      return 'Git / imported repositories';
+    return meta.via === 'api' ? 'Artemis (loaded by URL)' : 'Artemis (uploaded ZIP)';
+  };
+
   const total = states.reduce((sum, state) => sum + state.changes.count, 0);
-  const pushValid = !!push && !!push.message.trim() && !!push.name.trim() && /^\S+@\S+$/.test(push.email.trim());
+  const pushValid = !!push && !!push.message.trim() && !!push.name.trim() && /^[^\s@]+@[^\s@]+$/.test(push.email.trim());
 
   const renderActions = (index: number, state: VariantState) => {
     const { changes, meta, remotes } = state;
@@ -173,7 +185,7 @@ export function PendingChangesPanel({ exercise, refreshToken, onWritten, onProbl
               <p className="text-sm font-semibold">
                 {labelOf(index)}
                 <span className="ml-2 text-xs font-normal text-muted-foreground">
-                  {state.meta ? `Artemis (${state.meta.via === 'api' ? 'loaded by URL' : 'uploaded ZIP'})` : 'Git / imported repositories'}
+                  {originLabel(state.meta)}
                 </span>
               </p>
               <div className="flex flex-wrap gap-2">{renderActions(index, state)}</div>
@@ -192,8 +204,7 @@ export function PendingChangesPanel({ exercise, refreshToken, onWritten, onProbl
                   <li key={`${repoType}/${change.path}`} className="flex items-center gap-2">
                     <span className={`rounded px-1.5 font-mono ${badgeClass}`}>{letter}</span>
                     <span className="flex-1 font-mono break-all"><span className="text-muted-foreground">{repoType}/</span>{change.path}</span>
-                    <Button variant="ghost" size="sm" className="h-6 text-xs" disabled={busy}
-                      onClick={() => run(async () => { await discardFile(exercise, index, repoType, change.path); return undefined; })}>
+                    <Button variant="ghost" size="sm" className="h-6 text-xs" disabled={busy} onClick={() => discardRepoFile(index, repoType, change.path)}>
                       Discard
                     </Button>
                   </li>

@@ -13,7 +13,7 @@ export function downloadFile(filename: string, data: BlobPart, type: string) {
   a.download = filename;
   document.body.appendChild(a);
   a.click();
-  document.body.removeChild(a);
+  a.remove();
 
   /*  Delay revocation to ensure the download has started  */
   setTimeout(() => URL.revokeObjectURL(url), 1000);

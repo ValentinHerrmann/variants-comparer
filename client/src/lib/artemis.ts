@@ -2,7 +2,7 @@ import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import git from 'isomorphic-git';
 import { merge } from 'node-diff3';
 import type { ExerciseConfig } from '@/types';
-import { variantChanges } from './changes';
+import { variantChanges, type FileChange } from './changes';
 import { getArtemisToken, getProxyBase } from './config';
 import { commonRoot, importZipBytes, replaceRepo, repoZipEntries, zipRepo } from './importer';
 import { fs, readArtemisExportBytes, readArtemisMeta, repoDir, REPO_TYPES, writeArtemisMeta, type ArtemisMeta, type RepoType } from './repoStore';
@@ -95,11 +95,9 @@ export async function fetchArtemisExport(input: string): Promise<Uint8Array> {
 
 /*  Replace a variant's repositories with those of a parsed Artemis export and remember its origin for write-back  */
 export async function importArtemisExport(exercise: ExerciseConfig, variantIndex: number, bytes: Uint8Array, parsed: ArtemisExport, sourceUrl?: string) {
-  const imported: RepoType[] = [];
-  for (const [ repoType, repoBytes ] of Object.entries(parsed.repos) as Array<[ RepoType, Uint8Array ]>) {
-    await importZipBytes(exercise, variantIndex, repoType, repoBytes);
-    imported.push(repoType);
-  }
+  const repos = Object.entries(parsed.repos) as Array<[ RepoType, Uint8Array ]>;
+  await Promise.all(repos.map(([ repoType, repoBytes ]) => importZipBytes(exercise, variantIndex, repoType, repoBytes)));
+  const imported = repos.map(([ repoType ]) => repoType);
   const exportUrl = sourceUrl ? toArtemisExportUrl(sourceUrl) : undefined;
   const meta: ArtemisMeta = {
     via: exportUrl ? 'api' : 'zip',
@@ -114,28 +112,28 @@ export async function importArtemisExport(exercise: ExerciseConfig, variantIndex
 /*  Rebuild a ZIP level of the stored export: repo ZIPs get the current working trees (below their original root
     folder, without .git, which Artemis skips on import anyway), the problem statement gets the current text  */
 async function rebuildExportLevel(exercise: ExerciseConfig, variantIndex: number, bytes: Uint8Array, problemStatement: string, depth: number): Promise<ReturnType<typeof zipSync>> {
-  const rebuilt: Record<string, Uint8Array> = {};
-  for (const [ path, data ] of Object.entries(unzipSync(bytes))) {
+  const rebuildEntry = async (path: string, data: Uint8Array): Promise<Uint8Array> => {
     const name = baseName(path);
     const repoType = isZip(name) ? repoTypeOfZip(name) : undefined;
     if (repoType)
-      rebuilt[path] = await zipRepo(exercise, variantIndex, repoType, commonRoot(Object.keys(unzipSync(data))));
-    else if (isZip(name) && depth < MAX_ZIP_DEPTH)
-      rebuilt[path] = await rebuildExportLevel(exercise, variantIndex, data, problemStatement, depth + 1);
-    else if (isProblemStatement(name))
-      rebuilt[path] = strToU8(problemStatement);
-    else if (isExerciseDetails(name)) {
+      return zipRepo(exercise, variantIndex, repoType, commonRoot(Object.keys(unzipSync(data))));
+    if (isZip(name) && depth < MAX_ZIP_DEPTH)
+      return rebuildExportLevel(exercise, variantIndex, data, problemStatement, depth + 1);
+    if (isProblemStatement(name))
+      return strToU8(problemStatement);
+    if (isExerciseDetails(name)) {
       try {
-        rebuilt[path] = strToU8(JSON.stringify({ ...JSON.parse(strFromU8(data)), problemStatement }, null, 2));
+        return strToU8(JSON.stringify({ ...JSON.parse(strFromU8(data)), problemStatement }, null, 2));
       }
       catch {
-        rebuilt[path] = data;
+        return data;
       }
     }
-    else
-      rebuilt[path] = data;
-  }
-  return zipSync(rebuilt);
+    return data;
+  };
+  const entries = Object.entries(unzipSync(bytes));
+  const rebuilt = await Promise.all(entries.map(([ path, data ]) => rebuildEntry(path, data)));
+  return zipSync(Object.fromEntries(entries.map(([ path ], idx) => [ path, rebuilt[idx]! ])));
 }
 
 /*  Artemis export ZIP of a variant with all local edits, for "Import from file" in Artemis (creates a new exercise)  */
@@ -170,7 +168,7 @@ export function decideWrite(base: string | undefined, local: string | undefined,
   return { action: server === undefined ? 'create' : 'update', content: target };
 }
 
-type RepoPlan = { creates: Array<[ string, string ]>; updates: Array<[ string, string ]>; deletes: string[] };
+type RepoPlan = { creates: Array<[ string, string ]>; updates: Array<[ string, string ]>; deletes: string[]; conflicts: string[] };
 
 async function baselineFile(dir: string, filepath: string) {
   try {
@@ -182,7 +180,68 @@ async function baselineFile(dir: string, filepath: string) {
   }
 }
 
+/*  Decide the server operations of one repo from its local changes, their baselines and the current server files  */
+async function planRepoWrites(dir: string, changes: FileChange[], serverFiles: Map<string, Uint8Array>): Promise<RepoPlan> {
+  const decisions = await Promise.all(changes.map(async (change) => {
+    const local = change.kind === 'deleted' ? undefined : await fs.promises.readFile(`${dir}/${change.path}`, 'utf8') as string;
+    const serverFile = serverFiles.get(change.path);
+    return { path: change.path, decision: decideWrite(await baselineFile(dir, change.path), local, serverFile && strFromU8(serverFile)) };
+  }));
+  const plan: RepoPlan = { creates: [], updates: [], deletes: [], conflicts: [] };
+  for (const { path, decision } of decisions) {
+    if (decision.action === 'conflict')
+      plan.conflicts.push(path);
+    else if (decision.action === 'delete')
+      plan.deletes.push(path);
+    else if (decision.action === 'create')
+      plan.creates.push([ path, decision.content ]);
+    else if (decision.action === 'update')
+      plan.updates.push([ path, decision.content ]);
+  }
+  return plan;
+}
+
+/*  Server files of a repo after applying a plan, i.e. what the server holds once the plan is written  */
+function applyPlan(serverFiles: Map<string, Uint8Array>, plan: RepoPlan) {
+  const files = new Map(serverFiles);
+  for (const [ path, content ] of [ ...plan.creates, ...plan.updates ])
+    files.set(path, strToU8(content));
+  for (const path of plan.deletes)
+    files.delete(path);
+  return files;
+}
+
 type Participations = { templateParticipation?: { id: number }; solutionParticipation?: { id: number } };
+type ArtemisRequest = [ string, RequestInit ];
+
+const TEXT_HEADERS = { 'content-type': 'text/plain' };
+
+/*  Online-editor requests writing a plan to one repository (template/solution by participation, tests by exercise)  */
+function repoRequests(base: string, plan: RepoPlan): ArtemisRequest[] {
+  const fileUrl = (path: string) => `${base}/file?file=${encodeURIComponent(path)}`;
+  const updates: ArtemisRequest[] = plan.updates.length === 0 ? [] : [ [ `${base}/files?commit=false`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(plan.updates.map(([ fileName, fileContent ]) => ({ fileName, fileContent }))),
+  } ] ];
+  return [
+    ...plan.creates.map(([ path, content ]): ArtemisRequest => [ fileUrl(path), { method: 'POST', headers: TEXT_HEADERS, body: content } ]),
+    ...updates,
+    ...plan.deletes.map((path): ArtemisRequest => [ fileUrl(path), { method: 'DELETE' } ]),
+    [ `${base}/commit`, { method: 'POST' } ],
+  ];
+}
+
+async function repositoryBases(host: string, exerciseId: number): Promise<Record<RepoType, string | undefined>> {
+  const participations = await (await artemisFetch(host,
+    `/api/programming/programming-exercises/${exerciseId}/with-template-and-solution-participation?withSubmissionResults=false&withGradingCriteria=false`)).json() as Participations;
+  const participationBase = (participation?: { id: number }) => participation && `/api/programming/participations/${participation.id}/repository`;
+  return {
+    template: participationBase(participations.templateParticipation),
+    solution: participationBase(participations.solutionParticipation),
+    test: `/api/programming/programming-exercises/${exerciseId}/test-repository`,
+  };
+}
 
 /*  Write all pending edits of an Artemis variant back via the Artemis online-editor REST API. The current server
     state is fetched first; server changes since the import are merged, any conflict aborts before writing.
@@ -196,83 +255,48 @@ export async function writeToArtemis(exercise: ExerciseConfig, variantIndex: num
   const serverBytes = await fetchArtemisExport(`https://${host}/api/programming/programming-exercises/${exerciseId}`);
   const server = parseArtemisExport(serverBytes);
 
-  const conflicts: string[] = [];
-  const plans = {} as Record<RepoType, RepoPlan>;
   const serverFiles = {} as Record<RepoType, Map<string, Uint8Array>>;
   for (const repoType of REPO_TYPES) {
-    const plan: RepoPlan = { creates: [], updates: [], deletes: [] };
-    plans[repoType] = plan;
     const serverRepo = server.repos[repoType];
     serverFiles[repoType] = new Map(serverRepo ? repoZipEntries(serverRepo) : []);
-    const dir = repoDir(exercise, variantIndex, repoType);
-    for (const change of changes.repos[repoType]) {
-      const serverFile = serverFiles[repoType].get(change.path);
-      const local = change.kind === 'deleted' ? undefined : await fs.promises.readFile(`${dir}/${change.path}`, 'utf8') as string;
-      const decision = decideWrite(await baselineFile(dir, change.path), local, serverFile && strFromU8(serverFile));
-      if (decision.action === 'conflict')
-        conflicts.push(`${repoType}/${change.path}`);
-      else if (decision.action === 'delete')
-        plan.deletes.push(change.path);
-      else if (decision.action !== 'skip')
-        (decision.action === 'create' ? plan.creates : plan.updates).push([ change.path, decision.content ]);
-    }
   }
+  const planList = await Promise.all(REPO_TYPES.map((repoType) =>
+    planRepoWrites(repoDir(exercise, variantIndex, repoType), changes.repos[repoType], serverFiles[repoType])));
+  const plans = Object.fromEntries(REPO_TYPES.map((repoType, idx) => [ repoType, planList[idx]! ])) as Record<RepoType, RepoPlan>;
   const psDecision = changes.problemStatement
     ? decideWrite(meta.problemStatement, exercise.variants[variantIndex]?.markdown ?? '', server.problemStatement ?? '')
     : { action: 'skip' as const };
+  const conflicts = REPO_TYPES.flatMap((repoType) => plans[repoType].conflicts.map((path) => `${repoType}/${path}`));
   if (psDecision.action === 'conflict')
     conflicts.push('problem statement');
   if (conflicts.length > 0)
     throw new Error(`Changes made in Artemis since the import conflict with your edits in: ${conflicts.join(', ')}. Nothing was written; your edits stay pending.`);
 
-  const participations = await (await artemisFetch(host,
-    `/api/programming/programming-exercises/${exerciseId}/with-template-and-solution-participation?withSubmissionResults=false&withGradingCriteria=false`)).json() as Participations;
-  const repoBase: Record<RepoType, string | undefined> = {
-    template: participations.templateParticipation && `/api/programming/participations/${participations.templateParticipation.id}/repository`,
-    solution: participations.solutionParticipation && `/api/programming/participations/${participations.solutionParticipation.id}/repository`,
-    test: `/api/programming/programming-exercises/${exerciseId}/test-repository`,
-  };
-  const text = { 'content-type': 'text/plain' };
-  for (const repoType of REPO_TYPES) {
+  const changedRepos = REPO_TYPES.filter((repoType) => {
     const { creates, updates, deletes } = plans[repoType];
-    if (creates.length + updates.length + deletes.length === 0)
-      continue;
-    const base = repoBase[repoType];
-    if (!base)
-      throw new Error(`Artemis returned no ${repoType} participation for exercise ${exerciseId}.`);
-    for (const [ path, content ] of creates)
-      await artemisFetch(host, `${base}/file?file=${encodeURIComponent(path)}`, { method: 'POST', headers: text, body: content });
-    if (updates.length > 0)
-      await artemisFetch(host, `${base}/files?commit=false`, {
-        method: 'PUT',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(updates.map(([ fileName, fileContent ]) => ({ fileName, fileContent }))),
-      });
-    for (const path of deletes)
-      await artemisFetch(host, `${base}/file?file=${encodeURIComponent(path)}`, { method: 'DELETE' });
-    await artemisFetch(host, `${base}/commit`, { method: 'POST' });
+    return creates.length + updates.length + deletes.length > 0;
+  });
+  const requests: ArtemisRequest[] = [];
+  if (changedRepos.length > 0) {
+    const bases = await repositoryBases(host, exerciseId);
+    for (const repoType of changedRepos) {
+      const base = bases[repoType];
+      if (!base)
+        throw new Error(`Artemis returned no ${repoType} participation for exercise ${exerciseId}.`);
+      requests.push(...repoRequests(base, plans[repoType]));
+    }
   }
   let problemStatement = server.problemStatement ?? '';
   if (psDecision.action === 'update' || psDecision.action === 'create') {
     problemStatement = psDecision.content;
-    await artemisFetch(host, `/api/programming/programming-exercises/${exerciseId}/problem-statement`, {
-      method: 'PATCH',
-      headers: text,
-      body: problemStatement || ' ',
-    });
+    requests.push([ `/api/programming/programming-exercises/${exerciseId}/problem-statement`, { method: 'PATCH', headers: TEXT_HEADERS, body: problemStatement || ' ' } ]);
   }
+  for (const [ pathAndQuery, init ] of requests)
+    await artemisFetch(host, pathAndQuery, init); /*  NOSONAR: requests must reach Artemis in order (files before commit)  */
 
   /*  Local repos now mirror the server: its state plus what was just written, committed as the new baseline  */
-  for (const repoType of REPO_TYPES) {
-    if (!server.repos[repoType])
-      continue;
-    const files = serverFiles[repoType];
-    for (const [ path, content ] of [ ...plans[repoType].creates, ...plans[repoType].updates ])
-      files.set(path, strToU8(content));
-    for (const path of plans[repoType].deletes)
-      files.delete(path);
-    await replaceRepo(repoDir(exercise, variantIndex, repoType), [ ...files ]);
-  }
+  await Promise.all(REPO_TYPES.filter((repoType) => server.repos[repoType]).map((repoType) =>
+    replaceRepo(repoDir(exercise, variantIndex, repoType), [ ...applyPlan(serverFiles[repoType], plans[repoType]) ])));
   await writeArtemisMeta(exercise, variantIndex, { ...meta, problemStatement }, serverBytes);
   return problemStatement;
 }

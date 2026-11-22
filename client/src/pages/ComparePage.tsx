@@ -720,17 +720,16 @@ function ComparePage() {
       const mapping = (currentExercise.fileMappings ?? []).find((m) => m.baseFile === fileComp.relativePath && m.variantLabel === variantLabel);
       writes.push([ compareIndex + 1, mapping?.variantFile ?? fileComp.relativePath, sides.variant ]);
     }
-    for (const [ variantIndex, path, content ] of writes) {
+    await Promise.all(writes.map(async ([ variantIndex, path, content ]) => {
       if (compareType === 'problem')
         setVariantMarkdown(variantIndex, content ?? '');
       else if (content === null)
         await deleteRepoFile(currentExercise, variantIndex, compareType, path);
       else
         await writeRepoFile(currentExercise, variantIndex, compareType, path, content);
-    }
+    }));
     const resetLabels = sides.base !== undefined ? comparison?.variantLabels ?? [] : [ variantLabel ];
-    for (const label of resetLabels)
-      await handleReviewStatusChange(fileComp.relativePath, label, 'unchecked');
+    await Promise.all(resetLabels.map((label) => handleReviewStatusChange(fileComp.relativePath, label, 'unchecked')));
     setEditing(null);
     setRefreshToken((token) => token + 1);
   }, [comparison, compareType, currentExercise, handleReviewStatusChange, setVariantMarkdown]);

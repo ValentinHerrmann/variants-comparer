@@ -7,8 +7,8 @@ import { corsHeaders, isValidHost, joinPath, list, relay, type Context } from '.
 
 const FORWARDED_REQUEST_HEADERS = [ 'authorization', 'content-type' ];
 const EXPOSED_RESPONSE_HEADERS = [ 'content-type', 'content-length', 'filename' ];
-const EXERCISE = '/api/programming/programming-exercises/\\d+';
-const REPOSITORY = `(?:/api/programming/participations/\\d+/repository|${EXERCISE}/test-repository)`;
+const EXERCISE = String.raw`/api/programming/programming-exercises/\d+`;
+const REPOSITORY = String.raw`(?:/api/programming/participations/\d+/repository|${EXERCISE}/test-repository)`;
 
 /*  Exact method and path allowlist  */
 const ALLOWED: Array<[ string, RegExp ]> = [

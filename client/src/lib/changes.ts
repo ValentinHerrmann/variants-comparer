@@ -53,12 +53,11 @@ export async function commitAll(dir: string, message: string, author: CommitAuth
   const changes = await repoChanges(dir);
   if (changes.length === 0)
     return undefined;
-  for (const change of changes) {
-    if (change.kind === 'deleted')
-      await git.remove({ fs, dir, filepath: change.path });
-    else
-      await git.add({ fs, dir, filepath: change.path, force: true });
-  }
+  const added = changes.filter((change) => change.kind !== 'deleted').map((change) => change.path);
+  if (added.length > 0)
+    await git.add({ fs, dir, filepath: added, force: true });
+  for (const change of changes.filter((c) => c.kind === 'deleted'))
+    await git.remove({ fs, dir, filepath: change.path }); /*  NOSONAR: index updates of one repo must not overlap  */
   return git.commit({ fs, dir, message, author });
 }
 
@@ -96,9 +95,8 @@ export async function discardFile(exercise: ExerciseConfig, variantIndex: number
 }
 
 export async function variantChanges(exercise: ExerciseConfig, variantIndex: number): Promise<VariantChanges> {
-  const repos = {} as Record<RepoType, FileChange[]>;
-  for (const repoType of REPO_TYPES)
-    repos[repoType] = await repoChanges(repoDir(exercise, variantIndex, repoType));
+  const changeLists = await Promise.all(REPO_TYPES.map((repoType) => repoChanges(repoDir(exercise, variantIndex, repoType))));
+  const repos = Object.fromEntries(REPO_TYPES.map((repoType, idx) => [ repoType, changeLists[idx]! ])) as Record<RepoType, FileChange[]>;
   const meta = await readArtemisMeta(exercise, variantIndex);
   const problemStatement = meta !== undefined && (exercise.variants[variantIndex]?.markdown ?? '') !== meta.problemStatement;
   const count = REPO_TYPES.reduce((sum, repoType) => sum + repos[repoType].length, problemStatement ? 1 : 0);
@@ -107,10 +105,8 @@ export async function variantChanges(exercise: ExerciseConfig, variantIndex: num
 
 /*  Number of pending (not yet written back) changes of all variants of an exercise  */
 export async function exerciseChangeCount(exercise: ExerciseConfig) {
-  let count = 0;
-  for (const index of exercise.variants.keys())
-    count += (await variantChanges(exercise, index)).count;
-  return count;
+  const changes = await Promise.all(exercise.variants.map((_, index) => variantChanges(exercise, index)));
+  return changes.reduce((sum, variant) => sum + variant.count, 0);
 }
 
 /*  Remote a cloned repo pushes to; undefined for imported repos  */
