@@ -11,6 +11,8 @@ export type VariantForm = {
   templateRepo: string;
   markdown: string;
   courseLink: string;
+  artemisUrl?: string;
+  source?: 'urls' | 'artemis';
 };
 
 export type ReviewStatus = 'unchecked' | 'correct' | 'needs-attention';

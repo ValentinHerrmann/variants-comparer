@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import DiffMatchPatch from 'diff-match-patch';
 
-import { API_BASE } from '@/lib/api';
+import { compare, getReviewStatuses, setReviewStatus } from '@/lib/service';
 import type { CompareType, ComparisonResponse, FileComparison, ReviewStatus } from '@/types';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -42,8 +42,6 @@ function getInlineDiff(text1: string, text2: string): { left: CharSegment[]; rig
   return { left, right };
 }
 
-type OpenExternalAction = 'vscode-together' | 'vscode-separately';
-
 function FileComparisonCard({ 
   fileComp, 
   baseVariant, 
@@ -51,8 +49,6 @@ function FileComparisonCard({
   fileMappings = [],
   reviewStatus,
   onReviewStatusChange,
-  compareType,
-  onOpenExternal,
 }: { 
   fileComp: FileComparison; 
   baseVariant: string;
@@ -60,28 +56,10 @@ function FileComparisonCard({
   fileMappings?: Array<{ baseFile: string; variantFile: string; variantLabel: string }>;
   reviewStatus: ReviewStatus;
   onReviewStatusChange: (status: ReviewStatus) => void;
-  compareType: CompareType;
-  onOpenExternal: (relativePath: string, variantLabel: string, action: OpenExternalAction, mappedPath?: string) => void;
 }) {
   const baseLines = fileComp.baseContent.split('\n');
   const scrollRefs = useRef<(HTMLDivElement | null)[]>([]);
   const hasScrolledToFirst = useRef(false);
-  const [showOpenMenu, setShowOpenMenu] = useState(false);
-  const menuTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  
-  // Bug fix: Clear timeout on unmount to prevent memory leak
-  useEffect(() => {
-    return () => {
-      if (menuTimeoutRef.current) {
-        clearTimeout(menuTimeoutRef.current);
-      }
-    };
-  }, []);
-  
-  const handleMenuBlur = useCallback(() => {
-    menuTimeoutRef.current = setTimeout(() => setShowOpenMenu(false), 150);
-  }, []);
-  
   // Only show the selected variant
   const selectedVariant = fileComp.variants[activeVariantIndex];
   
@@ -144,7 +122,7 @@ function FileComparisonCard({
     'border-slate-300';
 
   // External tools available for repo comparisons, not markdown
-  const canOpenExternal = compareType !== 'problem';
+
 
   return (
     <Card className={`border ${borderColorClass}`}>
@@ -160,46 +138,6 @@ function FileComparisonCard({
                 <span className="text-muted-foreground">
                   <span className="font-mono font-medium">{mapping.variantFile}</span>
                 </span>
-              </div>
-            )}
-            {/* VS Code dropdown */}
-            {canOpenExternal && selectedVariant && (
-              <div className="relative">
-                <button
-                  onClick={() => setShowOpenMenu(!showOpenMenu)}
-                  onBlur={handleMenuBlur}
-                  className="p-1.5 rounded-md transition-colors hover:bg-blue-50 flex items-center gap-1"
-                  title="Open in VS Code"
-                >
-                  <img src="/vscode_icon.svg" alt="VS Code" width="16" height="16" />
-                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <polyline points="6 9 12 15 18 9"></polyline>
-                  </svg>
-                </button>
-                {showOpenMenu && (
-                  <div className="absolute right-0 top-full mt-1 bg-white rounded-md shadow-lg border border-slate-200 py-1 z-50 min-w-[200px]">
-                    <button
-                      onClick={() => {
-                        onOpenExternal(fileComp.relativePath, selectedVariant.variant, 'vscode-together', mapping?.variantFile);
-                        setShowOpenMenu(false);
-                      }}
-                      className="w-full px-3 py-2 text-left text-sm hover:bg-slate-50 flex items-center gap-2"
-                    >
-                      <img src="/vscode_icon.svg" alt="" width="14" height="14" />
-                      Open Together
-                    </button>
-                    <button
-                      onClick={() => {
-                        onOpenExternal(fileComp.relativePath, selectedVariant.variant, 'vscode-separately', mapping?.variantFile);
-                        setShowOpenMenu(false);
-                      }}
-                      className="w-full px-3 py-2 text-left text-sm hover:bg-slate-50 flex items-center gap-2"
-                    >
-                      <img src="/vscode_icon.svg" alt="" width="14" height="14" />
-                      Open Separately
-                    </button>
-                  </div>
-                )}
               </div>
             )}
             {/* Review status buttons */}
@@ -456,7 +394,7 @@ function FileComparisonCard({
 }
 
 function ComparePage() {
-  const { currentExercise, activeExerciseIndex, isSaving } = useExercise();
+  const { currentExercise } = useExercise();
   const [compareType, setCompareType] = useState<CompareType>('problem');
   const [comparison, setComparison] = useState<ComparisonResponse | null>(null);
   const [compareStatus, setCompareStatus] = useState<'idle' | 'loading' | 'error'>('idle');
@@ -466,26 +404,21 @@ function ComparePage() {
   const [showFilter, setShowFilter] = useState<'all' | 'needs-attention' | 'unchecked'>('all');
 
   const exerciseName = currentExercise.exerciseName;
-  const targetFolder = currentExercise.targetFolder;
 
-  // Fetch review statuses from server
+  // Load persisted review statuses
   useEffect(() => {
     const fetchReviewStatuses = async () => {
       try {
-        const response = await fetch(`${API_BASE}/api/review-status`);
-        const data = await response.json();
-        if (data.ok && data.reviewStatuses) {
-          // Convert array to map for easier lookup
-          const statusMap: Record<string, ReviewStatus> = {};
-          for (const review of data.reviewStatuses) {
-            // Key format: exerciseName:filePath + compareType + variantLabel
-            const key = `${review.filePath}:${review.compareType}:${review.variantLabel}`;
-            statusMap[key] = review.status;
-          }
-          setReviewStatuses(statusMap);
+        // Convert array to map for easier lookup
+        const statusMap: Record<string, ReviewStatus> = {};
+        for (const review of getReviewStatuses()) {
+          // Key format: exerciseName:filePath + compareType + variantLabel
+          const key = `${review.filePath}:${review.compareType}:${review.variantLabel}`;
+          statusMap[key] = review.status;
         }
+        setReviewStatuses(statusMap);
       } catch (error) {
-        console.error('Failed to fetch review statuses:', error);
+        console.error('Failed to load review statuses:', error);
       }
     };
     fetchReviewStatuses();
@@ -496,79 +429,19 @@ function ComparePage() {
     return `${exerciseName}:${relativePath}:${compareType}:${variantLabel}`;
   }, [exerciseName, compareType]);
 
-  // Update review status for a file - save to server
+  // Update and persist review status for a file
   const handleReviewStatusChange = useCallback(async (relativePath: string, variantLabel: string, status: ReviewStatus) => {
     const key = getReviewKey(relativePath, variantLabel);
     
     // Optimistically update local state
     setReviewStatuses(prev => ({ ...prev, [key]: status }));
     
-    // Save to server
     try {
-      await fetch(`${API_BASE}/api/review-status`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          exerciseName,
-          filePath: relativePath,
-          variantLabel,
-          compareType,
-          status,
-        }),
-      });
+      setReviewStatus({ exerciseName, filePath: relativePath, variantLabel, compareType, status });
     } catch (error) {
       console.error('Failed to save review status:', error);
     }
   }, [getReviewKey, exerciseName, compareType]);
-
-  // Open files in VS Code
-  const handleOpenExternal = useCallback(async (relativePath: string, variantLabel: string, action: OpenExternalAction, mappedPath?: string) => {
-    try {
-      const response = await fetch(`${API_BASE}/api/open-vscode-diff`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          compareType,
-          relativePath,
-          variantLabel,
-          mappedPath,
-        }),
-      });
-      const data = await response.json();
-      if (!data.ok) {
-        console.error('Failed to get file paths:', data.error);
-        return;
-      }
-      
-      const { baseFilePath, variantFilePath } = data;
-      
-      if (action === 'vscode-together') {
-        // Open both files in the same VS Code window
-        if (baseFilePath && variantFilePath) {
-          window.open(`vscode://file${baseFilePath}?windowId=_blank`, '_blank');
-          setTimeout(() => {
-            window.open(`vscode://file${variantFilePath}`, '_blank');
-          }, 500);
-        } else if (baseFilePath) {
-          window.open(`vscode://file${baseFilePath}?windowId=_blank`, '_blank');
-        } else if (variantFilePath) {
-          window.open(`vscode://file${variantFilePath}?windowId=_blank`, '_blank');
-        }
-      } else if (action === 'vscode-separately') {
-        // Open each file in its own new VS Code window
-        if (baseFilePath) {
-          window.open(`vscode://file${baseFilePath}?windowId=_blank`, '_blank');
-        }
-        if (variantFilePath) {
-          setTimeout(() => {
-            window.open(`vscode://file${variantFilePath}?windowId=_blank`, '_blank');
-          }, 300);
-        }
-      }
-    } catch (error) {
-      console.error('Failed to open in VS Code:', error);
-    }
-  }, [compareType]);
 
   // Reset variant index when comparison data changes
   useEffect(() => {
@@ -576,45 +449,33 @@ function ComparePage() {
   }, [comparison]);
 
   useEffect(() => {
-    // Wait for save to complete before fetching
-    if (isSaving) {
-      console.log('Waiting for save to complete...');
-      return;
-    }
-    
-    const fetchComparison = async () => {
-      console.log('Fetching comparison for exercise index:', activeExerciseIndex);
+    let cancelled = false;
+    const runComparison = async () => {
       setCompareStatus('loading');
       setCompareError('');
-      
-      // Add a small delay to ensure the save has fully persisted
-      await new Promise(resolve => setTimeout(resolve, 100));
-      
       try {
-        const response = await fetch(`${API_BASE}/api/compare`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ compareType }),
-        });
-        const payload = await response.json();
-        console.log('Comparison response:', payload);
-        if (!response.ok || !payload?.ok) {
-          throw new Error(payload?.error ?? 'Unable to compute comparison');
+        const result = await compare(currentExercise, compareType);
+        if (!cancelled) {
+          setComparison(result);
+          setCompareStatus('idle');
         }
-        setComparison(payload);
-        setCompareStatus('idle');
       } catch (error) {
         console.error(error);
-        setCompareError(error instanceof Error ? error.message : 'Unknown error');
-        setCompareStatus('error');
+        if (!cancelled) {
+          setCompareError(error instanceof Error ? error.message : 'Unknown error');
+          setCompareStatus('error');
+        }
       }
     };
 
-    fetchComparison();
-  }, [compareType, activeExerciseIndex, isSaving]); // Re-fetch when exercise changes or save completes
+    runComparison();
+    return () => {
+      cancelled = true;
+    };
+  }, [compareType, currentExercise]);
 
   const renderConfigSummary = () => {
-    if (!exerciseName || !targetFolder) {
+    if (!exerciseName) {
       return <p className="text-sm text-red-600">Could not load config. Make sure you saved links first.</p>;
     }
 
@@ -630,8 +491,8 @@ function ComparePage() {
             <p className="font-medium">{exerciseName}</p>
           </div>
           <div>
-            <p className="text-muted-foreground">Target folder</p>
-            <p className="font-mono text-xs">{targetFolder}</p>
+            <p className="text-muted-foreground">Variants</p>
+            <p className="font-medium">{currentExercise.variants.map((v) => v.label).join(', ')}</p>
           </div>
         </CardContent>
       </Card>
@@ -748,8 +609,6 @@ function ComparePage() {
                   fileMappings={currentExercise.fileMappings || []}
                   reviewStatus={reviewStatus}
                   onReviewStatusChange={(status) => handleReviewStatusChange(fileComp.relativePath, currentVariantLabel, status)}
-                  compareType={compareType}
-                  onOpenExternal={handleOpenExternal}
                 />
               );
             })}

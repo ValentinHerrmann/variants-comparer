@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { API_BASE } from '@/lib/api';
+import { clearReviewStatuses, getReviewStatuses, getStats, getStatsIncludedTypes, setStatsIncludedTypes } from '@/lib/service';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { Button } from '@/components/ui/button';
@@ -19,11 +19,6 @@ type ExerciseStats = {
   byCompareType: Record<string, CompareTypeStats>;
   byVariant: Record<string, Record<string, CompareTypeStats>>;
   totalReviewed: number;
-};
-
-type StatsResponse = {
-  ok: boolean;
-  stats: ExerciseStats[];
 };
 
 const compareTypeLabels: Record<string, string> = {
@@ -49,30 +44,9 @@ function StatsPage() {
     try {
       setLoading(true);
       
-      // Fetch stats, included types, and review statuses in parallel
-      const [statsRes, typesRes, reviewRes] = await Promise.all([
-        fetch(`${API_BASE}/api/stats`),
-        fetch(`${API_BASE}/api/stats-included-types`),
-        fetch(`${API_BASE}/api/review-status`),
-      ]);
-      
-      const statsData: StatsResponse = await statsRes.json();
-      const typesData = await typesRes.json();
-      const reviewData = await reviewRes.json();
-      
-      if (statsData.ok) {
-        setStats(statsData.stats);
-      } else {
-        setError('Failed to load stats');
-      }
-      
-      if (typesData.ok && typesData.statsIncludedTypes) {
-        setIncludedTypes(typesData.statsIncludedTypes);
-      }
-      
-      if (reviewData.ok && reviewData.reviewStatuses) {
-        setReviewStatuses(reviewData.reviewStatuses);
-      }
+      setStats(await getStats());
+      setIncludedTypes(getStatsIncludedTypes());
+      setReviewStatuses(getReviewStatuses());
     } catch (err) {
       setError('Failed to fetch stats');
       console.error(err);
@@ -90,16 +64,8 @@ function StatsPage() {
   const handleClearAllStats = async () => {
     try {
       setIsClearing(true);
-      const response = await fetch(`${API_BASE}/api/review-status`, {
-        method: 'DELETE',
-      });
-      const data = await response.json();
-      if (data.ok) {
-        // Refresh the data
-        await fetchData();
-      } else {
-        console.error('Failed to clear stats:', data.error);
-      }
+      clearReviewStatuses();
+      await fetchData();
     } catch (err) {
       console.error('Failed to clear stats:', err);
     } finally {
@@ -115,13 +81,8 @@ function StatsPage() {
     
     setIncludedTypes(newIncluded);
     
-    // Save to server
     try {
-      await fetch(`${API_BASE}/api/stats-included-types`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ statsIncludedTypes: newIncluded }),
-      });
+      setStatsIncludedTypes(newIncluded);
     } catch (err) {
       console.error('Failed to save included types:', err);
     }
