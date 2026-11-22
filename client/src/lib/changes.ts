@@ -169,15 +169,15 @@ async function headContent(dir: string, filepath: string) {
 
 /*  Pending edits of the given repos of a variant (plus its Artemis problem statement) as unified diffs  */
 export async function pendingEdits(exercise: ExerciseConfig, variantIndex: number, repoTypes: RepoType[] = REPO_TYPES, withProblem = true) {
-  const edits: FileEdit[] = [];
-  for (const repoType of repoTypes) {
+  const perRepo = await Promise.all(repoTypes.map(async (repoType) => {
     const dir = repoDir(exercise, variantIndex, repoType);
-    for (const change of await repoChanges(dir)) {
+    return Promise.all((await repoChanges(dir)).map(async (change): Promise<FileEdit> => {
       const before = change.kind === 'added' ? '' : await headContent(dir, change.path);
       const after = change.kind === 'deleted' ? '' : await fs.promises.readFile(`${dir}/${change.path}`, 'utf8') as string;
-      edits.push({ repoType, path: change.path, kind: change.kind, patch: unifiedPatch(change.path, before, after) });
-    }
-  }
+      return { repoType, path: change.path, kind: change.kind, patch: unifiedPatch(change.path, before, after) };
+    }));
+  }));
+  const edits = perRepo.flat();
   const meta = withProblem ? await readArtemisMeta(exercise, variantIndex) : undefined;
   const markdown = exercise.variants[variantIndex]?.markdown ?? '';
   if (meta && meta.problemStatement !== markdown)

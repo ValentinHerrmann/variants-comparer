@@ -37,8 +37,8 @@ function formatDate(date: Date) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-const cell = (text: string) => text.replace(/\|/g, '\\|');
-const oneLine = (text: string) => text.trim().replace(/\s*\n\s*/g, ' / ');
+const cell = (text: string) => text.replaceAll('|', String.raw`\|`);
+const oneLine = (text: string) => text.split('\n').map((line) => line.trim()).filter(Boolean).join(' / ');
 
 /*  Fenced block whose fence is longer than any backtick run in the content, indented into a list item  */
 function fenced(content: string, lang: string, indent = '  ') {
@@ -49,7 +49,8 @@ function fenced(content: string, lang: string, indent = '  ') {
 }
 
 function fileLine(file: ReviewedFile, detailed: boolean, withPatch: boolean) {
-  const line = `- \`${file.path}\`${file.comment ? ` — ${oneLine(file.comment)}` : ''}`;
+  const comment = file.comment ? ` — ${oneLine(file.comment)}` : '';
+  const line = `- \`${file.path}\`${comment}`;
   return detailed && withPatch && file.patch ? `${line}\n\n${fenced(file.patch, 'diff')}\n` : line;
 }
 
@@ -120,10 +121,11 @@ function statusBlock(title: string, sections: Section[], status: ReviewStatus, d
 async function exerciseReport(exercise: ExerciseConfig, reviews: FileReview[], detailed: boolean) {
   const labels = exercise.variants.map((v, idx) => v.label || `Variant ${idx + 1}`);
   const { sections, summary } = await collectReviews(exercise, reviews);
+  const variantList = labels.map((label, idx) => (idx === 0 ? `\`${label}\` (base)` : `\`${label}\``)).join(', ');
   const lines = [
     `## Exercise: ${exercise.exerciseName}`,
     '',
-    `Variants: ${labels.map((label, idx) => `\`${label}\`${idx === 0 ? ' (base)' : ''}`).join(', ')}`,
+    `Variants: ${variantList}`,
     '',
     '### Summary',
     '',
@@ -142,13 +144,12 @@ async function exerciseReport(exercise: ExerciseConfig, reviews: FileReview[], d
     attention: sum.attention + row.attention,
   }), { differing: 0, reviewed: 0, attention: 0 });
   const percent = total.differing > 0 ? Math.round(total.reviewed / total.differing * 100) : 100;
-  lines.push('', `**Progress:** ${total.reviewed} of ${total.differing} differing files reviewed (${percent} %), ${total.attention} need attention.`, '');
-
-  lines.push(...statusBlock('Needs attention', sections, 'needs-attention', detailed, true));
-  lines.push(...statusBlock('Not reviewed yet', sections, 'unchecked', detailed, true));
-  lines.push(...statusBlock('Verified as correct', sections, 'correct', detailed, false));
-
-  lines.push('### Edits', '', '#### Written back', '');
+  lines.push(
+    '', `**Progress:** ${total.reviewed} of ${total.differing} differing files reviewed (${percent} %), ${total.attention} need attention.`, '',
+    ...statusBlock('Needs attention', sections, 'needs-attention', detailed, true),
+    ...statusBlock('Not reviewed yet', sections, 'unchecked', detailed, true),
+    ...statusBlock('Verified as correct', sections, 'correct', detailed, false),
+    '### Edits', '', '#### Written back', '');
   const written = (await Promise.all(exercise.variants.map(async (_, idx) =>
     (await readEditLog(exercise, idx)).map((entry) => ({ ...entry, variant: labels[idx]! })))))
     .flat()

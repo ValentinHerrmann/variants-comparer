@@ -57,6 +57,14 @@ function ReviewButtons({ status, onChange, comment, onCommentChange }: Readonly<
   onCommentChange: (comment: string) => void;
 }>) {
   const [ draft, setDraft ] = useState<string | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const isOpen = draft !== null;
+
+  /*  Focus the comment field when it opens  */
+  useEffect(() => {
+    if (isOpen)
+      textareaRef.current?.focus();
+  }, [ isOpen ]);
   const saveComment = () => {
     if (draft !== null)
       onCommentChange(draft.trim());
@@ -101,14 +109,14 @@ function ReviewButtons({ status, onChange, comment, onCommentChange }: Readonly<
         }`}
         title={comment ? `Comment: ${comment}` : 'Add a review comment'}
       >
-        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill={comment ? 'currentColor' : 'none'} fillOpacity={comment ? 0.2 : 0} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <svg aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill={comment ? 'currentColor' : 'none'} fillOpacity={comment ? 0.2 : 0} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
         </svg>
       </button>
       {draft !== null && (
         <div className="absolute right-0 top-full z-20 mt-1 w-80 space-y-2 rounded-md border border-slate-200 bg-white p-2 text-left shadow-lg">
           <textarea
-            autoFocus
+            ref={textareaRef}
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
