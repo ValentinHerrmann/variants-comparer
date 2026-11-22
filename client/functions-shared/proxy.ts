@@ -10,13 +10,13 @@ export const isValidHost = (host: string) => /^[a-z0-9.-]+\.[a-z0-9-]+(:\d+)?$/i
 export const joinPath = (path?: string | string[]) => (Array.isArray(path) ? path.join('/') : (path ?? ''));
 
 /*  CORS headers for the own origin and ALLOWED_ORIGINS only  */
-export function corsHeaders(request: Request, env: Env, allowHeaders: string[], exposeHeaders: string[]): Headers {
+export function corsHeaders(request: Request, env: Env, allowMethods: string[], allowHeaders: string[], exposeHeaders: string[]): Headers {
   const headers = new Headers({ 'vary': 'Origin' });
   const origin = request.headers.get('origin');
   const allowed = [ new URL(request.url).origin, ...list(env.ALLOWED_ORIGINS) ];
   if (origin && allowed.includes(origin)) {
     headers.set('access-control-allow-origin', origin);
-    headers.set('access-control-allow-methods', 'GET, POST, OPTIONS');
+    headers.set('access-control-allow-methods', [ ...allowMethods, 'OPTIONS' ].join(', '));
     headers.set('access-control-allow-headers', allowHeaders.join(', '));
     headers.set('access-control-expose-headers', exposeHeaders.join(', '));
     headers.set('access-control-max-age', '86400');

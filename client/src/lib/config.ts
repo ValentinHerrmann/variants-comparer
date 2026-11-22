@@ -5,6 +5,7 @@ import type { CompareType, MultiExerciseConfig } from '@/types';
 const CONFIG_KEY = 'variants-comparer:config';
 const PROXY_KEY = 'variants-comparer:proxy-base';
 const ARTEMIS_TOKEN_KEY = 'variants-comparer:artemis-token';
+const COMMIT_AUTHOR_KEY = 'variants-comparer:commit-author';
 
 const urlField = (message: string) =>
   z
@@ -168,4 +169,19 @@ export function getArtemisToken(): string {
 
 export function setArtemisToken(token: string) {
   sessionStorage.setItem(ARTEMIS_TOKEN_KEY, token.trim());
+}
+
+/*  Author of commits pushed from the app, remembered per browser  */
+export function getCommitAuthor(): { name: string; email: string } {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(COMMIT_AUTHOR_KEY) ?? '{}') as { name?: unknown; email?: unknown };
+    return { name: typeof parsed.name === 'string' ? parsed.name : '', email: typeof parsed.email === 'string' ? parsed.email : '' };
+  }
+  catch {
+    return { name: '', email: '' };
+  }
+}
+
+export function setCommitAuthor(author: { name: string; email: string }) {
+  localStorage.setItem(COMMIT_AUTHOR_KEY, JSON.stringify({ name: author.name.trim(), email: author.email.trim() }));
 }

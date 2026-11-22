@@ -42,12 +42,18 @@ export async function pathExists(filepath: string) {
   }
 }
 
+/*  Tolerates directories created concurrently by parallel writes into the same tree  */
 export async function mkdirp(dir: string) {
   let current = '';
   for (const part of dir.split('/').filter(Boolean)) {
     current += `/${part}`;
-    if (!(await pathExists(current)))
-      await pfs.mkdir(current);
+    try {
+      await pfs.mkdir(current); /*  NOSONAR: parent directories must exist before their children  */
+    }
+    catch (error) {
+      if ((error as { code?: string }).code !== 'EEXIST')
+        throw error;
+    }
   }
 }
 
@@ -97,16 +103,17 @@ export async function readRepo(exercise: ExerciseConfig, variantIndex: number, r
   return (await pathExists(dir)) ? readFilesRecursive(dir) : undefined;
 }
 
-/*  Count files below dir (ignoring .git / node_modules) without reading their content  */
-async function countFiles(dir: string): Promise<number> {
-  let count = 0;
-  for (const name of await pfs.readdir(dir)) {
-    if (ignoredDirs.has(name))
-      continue;
-    const stat = await pfs.stat(`${dir}/${name}`);
-    count += stat.isDirectory() ? await countFiles(`${dir}/${name}`) : 1;
-  }
-  return count;
+/*  Paths of all files below dir (ignoring .git / node_modules) relative to baseDir, without reading their content  */
+export async function listFilePaths(dir: string, baseDir = dir): Promise<string[]> {
+  const names = (await pfs.readdir(dir)).filter((name) => !ignoredDirs.has(name));
+  const nested = await Promise.all(names.map(async (name): Promise<string[]> => {
+    const fullPath = `${dir}/${name}`;
+    const stat = await pfs.stat(fullPath);
+    if (stat.isDirectory())
+      return listFilePaths(fullPath, baseDir);
+    return stat.isFile() ? [ fullPath.slice(baseDir.length + 1) ] : [];
+  }));
+  return nested.flat();
 }
 
 /*  File counts of all stored repositories of an exercise (undefined = not stored)  */
@@ -114,12 +121,11 @@ export type RepoStatus = Array<Record<RepoType, number | undefined>>;
 
 export async function getRepoStatus(exercise: ExerciseConfig): Promise<RepoStatus> {
   return Promise.all(exercise.variants.map(async (_, index) => {
-    const counts = {} as Record<RepoType, number | undefined>;
-    for (const repoType of REPO_TYPES) {
+    const counts = await Promise.all(REPO_TYPES.map(async (repoType) => {
       const dir = repoDir(exercise, index, repoType);
-      counts[repoType] = (await pathExists(dir)) ? await countFiles(dir) : undefined;
-    }
-    return counts;
+      return (await pathExists(dir)) ? (await listFilePaths(dir)).length : undefined;
+    }));
+    return Object.fromEntries(REPO_TYPES.map((repoType, idx) => [ repoType, counts[idx] ])) as Record<RepoType, number | undefined>;
   }));
 }
 
@@ -135,4 +141,37 @@ export async function moveDir(from: string, to: string) {
     throw new Error(`Repositories already exist at ${to}.`);
   await mkdirp(to.slice(0, to.lastIndexOf('/')));
   await pfs.rename(from, to);
+}
+
+/*  Origin of an Artemis variant: original export bytes plus baseline problem statement, stored next to its repos  */
+export type ArtemisMeta = {
+  via: 'zip' | 'api';
+  host?: string;
+  exerciseId?: number;
+  problemStatement: string;
+};
+
+const artemisMetaPath = (exercise: ExerciseConfig, variantIndex: number) => `${variantDir(exercise, variantIndex)}/.artemis.json`;
+const artemisExportPath = (exercise: ExerciseConfig, variantIndex: number) => `${variantDir(exercise, variantIndex)}/.artemis-export.zip`;
+
+export async function readArtemisMeta(exercise: ExerciseConfig, variantIndex: number): Promise<ArtemisMeta | undefined> {
+  const path = artemisMetaPath(exercise, variantIndex);
+  return (await pathExists(path)) ? JSON.parse(await pfs.readFile(path, 'utf8') as string) as ArtemisMeta : undefined;
+}
+
+export async function writeArtemisMeta(exercise: ExerciseConfig, variantIndex: number, meta: ArtemisMeta, exportBytes?: Uint8Array) {
+  await writeFileDeep(artemisMetaPath(exercise, variantIndex), JSON.stringify(meta));
+  if (exportBytes)
+    await writeFileDeep(artemisExportPath(exercise, variantIndex), exportBytes);
+}
+
+export async function readArtemisExportBytes(exercise: ExerciseConfig, variantIndex: number) {
+  const path = artemisExportPath(exercise, variantIndex);
+  return (await pathExists(path)) ? await pfs.readFile(path) as Uint8Array : undefined;
+}
+
+/*  A repo replaced from another source no longer belongs to the Artemis exercise  */
+export async function removeArtemisMeta(exercise: ExerciseConfig, variantIndex: number) {
+  await removeRecursive(artemisMetaPath(exercise, variantIndex));
+  await removeRecursive(artemisExportPath(exercise, variantIndex));
 }

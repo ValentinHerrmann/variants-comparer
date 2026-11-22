@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react';
 
 import { fetchArtemisExport, importArtemisExport, parseArtemisExport } from '@/lib/artemis';
+import { variantChanges, type VariantChanges } from '@/lib/changes';
 import { exportConfigJson, getArtemisToken, getDefaultProxyBase, getProxyBase, importConfigJson, setArtemisToken, setProxyBase } from '@/lib/config';
 import { cloneExercise, cloneJobs } from '@/lib/git';
 import { clearExerciseRepos, importFolder, importZip } from '@/lib/importer';
 import { exerciseDir, getRepoStatus, moveDir, removeRepo, REPO_TYPES, variantDir, type RepoStatus, type RepoType } from '@/lib/repoStore';
 import { listFiles, suggestMappings } from '@/lib/service';
+import { downloadFile } from '@/lib/utils';
 import type { DownloadResult, ExerciseConfig, VariantForm, MultiExerciseConfig, FileMapping } from '@/types';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { Button } from '@/components/ui/button';
@@ -85,12 +87,13 @@ function UrlInput({ id, value, placeholder, disabled, onChange }: {
 }
 
 /*  Stored state of one repository in browser storage  */
-function RepoBadge({ count, disabled, onRemove }: { count: number | undefined; disabled: boolean; onRemove: () => void }) {
+function RepoBadge({ count, modified, disabled, onRemove }: Readonly<{ count: number | undefined; modified: number; disabled: boolean; onRemove: () => void }>) {
   if (count === undefined)
     return <span className="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">not loaded</span>;
   return (
     <span className="inline-flex items-center gap-1 rounded bg-emerald-100 px-2 py-0.5 text-xs text-emerald-800">
       ✓ {count} files
+      {modified > 0 && <span className="rounded bg-amber-200 px-1 text-amber-900" title="Edited files not yet written back (see Compare page)">{modified} modified</span>}
       <button type="button" title="Remove from browser storage" aria-label="Remove repository" disabled={disabled} className="px-0.5 hover:text-red-700 disabled:opacity-50" onClick={onRemove}>
         ×
       </button>
@@ -125,6 +128,7 @@ type VariantCardProps = {
   index: number;
   variant: VariantForm;
   status: Record<RepoType, number | undefined> | undefined;
+  pending: VariantChanges | undefined;
   isBusy: boolean;
   hasName: boolean;
   hasToken: boolean;
@@ -138,7 +142,7 @@ type VariantCardProps = {
 };
 
 function VariantCard({
-  index, variant, status, isBusy, hasName, hasToken,
+  index, variant, status, pending, isBusy, hasName, hasToken,
   onChange, onLabelFocus, onLabelBlur, onRepoImport, onRemoveRepo, onArtemisLoad, onArtemisUpload,
 }: VariantCardProps) {
   const zipRef = useRef<HTMLInputElement>(null);
@@ -226,7 +230,7 @@ function VariantCard({
               {REPO_FIELDS.map(({ repoType, label }) => (
                 <li key={repoType} className="flex items-center justify-between gap-2">
                   <span className="text-muted-foreground">{label}</span>
-                  <RepoBadge count={status?.[repoType]} disabled={isBusy} onRemove={() => onRemoveRepo(repoType)} />
+                  <RepoBadge count={status?.[repoType]} modified={pending?.repos[repoType].length ?? 0} disabled={isBusy} onRemove={() => onRemoveRepo(repoType)} />
                 </li>
               ))}
             </ul>
@@ -237,7 +241,7 @@ function VariantCard({
             <div key={repoType} className="space-y-2">
               <div className="flex items-center justify-between gap-2">
                 <Label htmlFor={`${repoType}-${index}`}>{label} URL</Label>
-                <RepoBadge count={status?.[repoType]} disabled={isBusy} onRemove={() => onRemoveRepo(repoType)} />
+                <RepoBadge count={status?.[repoType]} modified={pending?.repos[repoType].length ?? 0} disabled={isBusy} onRemove={() => onRemoveRepo(repoType)} />
               </div>
               <UrlInput
                 id={`${repoType}-${index}`}
@@ -314,6 +318,8 @@ function ConfigurePage() {
   const [artemisToken, setArtemisTokenState] = useState(getArtemisToken);
   const [repoStatus, setRepoStatus] = useState<RepoStatus>([]);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
+  const [pending, setPending] = useState<VariantChanges[]>([]);
+  const [discardConfirm, setDiscardConfirm] = useState<{ count: number; action: () => void } | null>(null);
   const renameOrigin = useRef<ExerciseConfig | null>(null);
 
   const variants = currentExercise.variants;
@@ -326,6 +332,7 @@ function ConfigurePage() {
     try {
       const status = await getRepoStatus(exercise);
       setRepoStatus(status);
+      setPending(await Promise.all(exercise.variants.map((_, index) => variantChanges(exercise, index))));
       const variantsWithRepos = status.filter((counts) => REPO_TYPES.some((t) => counts[t] !== undefined)).length;
       setAvailableFiles(variantsWithRepos >= 2 ? await listFiles(exercise) : {});
     } catch (error) {
@@ -345,6 +352,12 @@ function ConfigurePage() {
     /* eslint-disable-next-line react-hooks/exhaustive-deps -- only on exercise switch, not on every edit */
   }, [activeExerciseIndex, configLoading, refreshRepoStatus]);
 
+  /*  Replacing or removing repositories loses edits not yet written back, so ask first  */
+  const repoPending = (variantIndex: number, repoType: RepoType) => pending[variantIndex]?.repos[repoType].length ?? 0;
+  const variantPending = (variantIndex: number) => pending[variantIndex]?.count ?? 0;
+  const totalPending = pending.reduce((sum, changes) => sum + changes.count, 0);
+  const guardPending = (count: number, action: () => void) => (count > 0 ? setDiscardConfirm({ count, action }) : action());
+
   const storedRepoCount = repoStatus.reduce((sum, counts) => sum + REPO_TYPES.filter((t) => counts[t] !== undefined).length, 0);
   const variantsWithFiles = Object.values(availableFiles).filter((v) => v.files.length > 0).length;
   const baseHasFiles = (availableFiles[variants[0]?.label || 'Variant 1']?.files.length ?? 0) > 0;
@@ -353,6 +366,11 @@ function ConfigurePage() {
   const anyArtemis = variants.some((v) => v.source === 'artemis');
   const artemisLoadable = variants.flatMap((v, idx) => (v.source === 'artemis' && v.artemisUrl?.trim() && isValidUrl(v.artemisUrl) ? [ idx ] : []));
   const downloadJobs = cloneJobs(currentExercise);
+
+  /*  Cloning drops a variant's Artemis link, so its pending problem statement counts, too  */
+  const downloadPending = downloadJobs.reduce((sum, job) => sum + repoPending(job.index, job.repoType), 0)
+    + [ ...new Set(downloadJobs.map((job) => job.index)) ].filter((index) => pending[index]?.problemStatement).length;
+
   const invalidUrlCount = downloadJobs.filter((job) => !isValidUrl(job.url)).length;
   const downloadBlocker = !hasName ? 'Enter an exercise name first.'
     : downloadJobs.length === 0 ? 'Enter at least one repository URL (variants in "Repository URLs" mode).'
@@ -369,16 +387,7 @@ function ConfigurePage() {
       const date = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
       const filename = `${exportName.trim()}-${date}.json`;
 
-      const blob = new Blob([exportConfigJson()], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      // Bug fix: Delay URL revocation to ensure download has started
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      downloadFile(filename, exportConfigJson(), 'application/json');
 
       addToast(`Config exported as ${filename}`, 'success');
     } catch (error) {
@@ -553,8 +562,8 @@ function ConfigurePage() {
     }
   };
 
-  const handleRepoImport = async (variantIndex: number, repoType: RepoType, files: FileList | null, kind: ImportKind) => {
-    if (!files?.length) return;
+  const handleRepoImport = async (variantIndex: number, repoType: RepoType, files: File[], kind: ImportKind) => {
+    if (!files.length) return;
     setLoading('import');
     try {
       const count = kind === 'zip'
@@ -598,12 +607,13 @@ function ConfigurePage() {
           name ||= parsed.title?.trim() ?? '';
           if (!name)
             throw new Error('Please provide an exercise name first.');
-          const imported = await importArtemisExport({ ...currentExercise, exerciseName: name }, variantIndex, parsed);
+          const imported = await importArtemisExport({ ...currentExercise, exerciseName: name }, variantIndex, bytes, parsed, /*  NOSONAR: the first export may set the exercise name  */
+            source ? undefined : variants[variantIndex]?.artemisUrl);
           updateCurrentExercise((ex) => ({
             ...ex,
             exerciseName: name,
-            variants: ex.variants.map((variant, idx) => (idx === variantIndex && parsed.problemStatement !== undefined
-              ? { ...variant, markdown: parsed.problemStatement }
+            variants: ex.variants.map((variant, idx) => (idx === variantIndex
+              ? { ...variant, markdown: parsed.problemStatement ?? '' }
               : variant)),
           }));
           addToast(`${label}: imported ${imported.map(formatRepoType).join(', ')} from Artemis.`, 'success');
@@ -859,7 +869,7 @@ function ConfigurePage() {
             size="sm"
             disabled={isBusy || artemisLoadable.length === 0 || !hasToken}
             title={!hasToken ? 'Enter your Artemis token first.' : artemisLoadable.length === 0 ? 'Enter an Artemis exercise URL first.' : undefined}
-            onClick={() => handleArtemisImport(artemisLoadable)}
+            onClick={() => guardPending(artemisLoadable.reduce((sum, index) => sum + variantPending(index), 0), () => handleArtemisImport(artemisLoadable))}
           >
             {loading === 'artemis' ? 'Loading from Artemis...' : `Load ${artemisLoadable.length || ''} variant${artemisLoadable.length === 1 ? '' : 's'} from Artemis`}
           </Button>
@@ -874,16 +884,20 @@ function ConfigurePage() {
             index={index}
             variant={variant}
             status={repoStatus[index]}
+            pending={pending[index]}
             isBusy={isBusy}
             hasName={hasName}
             hasToken={hasToken}
             onChange={(field, value) => handleVariantChange(index, field, value)}
             onLabelFocus={handleRenameStart}
             onLabelBlur={() => handleRenameCommit(index)}
-            onRepoImport={(repoType, files, kind) => handleRepoImport(index, repoType, files, kind)}
-            onRemoveRepo={(repoType) => handleRemoveRepo(index, repoType)}
-            onArtemisLoad={() => handleArtemisImport([ index ])}
-            onArtemisUpload={(file) => handleArtemisImport([ index ], file)}
+            onRepoImport={(repoType, files, kind) => {
+              const picked = Array.from(files ?? []);
+              guardPending(repoPending(index, repoType), () => handleRepoImport(index, repoType, picked, kind));
+            }}
+            onRemoveRepo={(repoType) => guardPending(repoPending(index, repoType), () => handleRemoveRepo(index, repoType))}
+            onArtemisLoad={() => guardPending(variantPending(index), () => handleArtemisImport([ index ]))}
+            onArtemisUpload={(file) => guardPending(variantPending(index), () => handleArtemisImport([ index ], file))}
           />
         ))}
       </div>
@@ -899,7 +913,7 @@ function ConfigurePage() {
       )}
 
       <div className="flex flex-wrap items-center gap-3">
-        <Button variant="secondary" onClick={handleDownload} disabled={isBusy || !!downloadBlocker}>
+        <Button variant="secondary" onClick={() => guardPending(downloadPending, handleDownload)} disabled={isBusy || !!downloadBlocker}>
           {loading === 'download'
             ? 'Downloading...'
             : `Download ${downloadJobs.length || ''} ${downloadJobs.length === 1 ? 'repository' : 'repositories'}`}
@@ -1142,8 +1156,19 @@ function ConfigurePage() {
         onClose={() => setShowClearConfirm(false)}
         onConfirm={handleClearRepos}
         title="Clear downloaded repositories?"
-        description={`This removes ${storedRepoCount} stored repositories of "${exerciseName || 'this exercise'}" from browser storage. The configuration (URLs, problem statements, mappings) is kept.`}
+        description={`This removes ${storedRepoCount} stored repositories of "${exerciseName || 'this exercise'}" from browser storage. The configuration (URLs, problem statements, mappings) is kept.`
+          + (totalPending > 0 ? ` ${totalPending} pending changes not yet written back are lost.` : '')}
         confirmText="Clear"
+        variant="destructive"
+      />
+
+      <ConfirmDialog
+        isOpen={!!discardConfirm}
+        onClose={() => setDiscardConfirm(null)}
+        onConfirm={() => discardConfirm?.action()}
+        title="Discard pending changes?"
+        description={`${discardConfirm?.count ?? 0} edited files are not yet written back (see the Compare page). Replacing or removing the repositories discards these edits.`}
+        confirmText="Discard and continue"
         variant="destructive"
       />
     </div>
