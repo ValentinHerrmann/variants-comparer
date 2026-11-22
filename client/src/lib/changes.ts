@@ -1,6 +1,6 @@
 import git from 'isomorphic-git';
 import type { ExerciseConfig } from '@/types';
-import { fs, listFilePaths, mkdirp, pathExists, readArtemisMeta, removeRecursive, repoDir, REPO_TYPES, writeFileDeep, type RepoType } from './repoStore';
+import { fs, listFilePaths, mkdirp, pathExists, persist, readArtemisMeta, removeRecursive, repoDir, REPO_TYPES, writeFileDeep, type RepoType } from './repoStore';
 
 /*  Local change tracking: every stored repo is a Git repo whose HEAD is the baseline last pulled or written back  */
 
@@ -80,7 +80,9 @@ export async function commitAll(dir: string, message: string, author: CommitAuth
     await git.add({ fs, dir, filepath: added, force: true });
   for (const change of changes.filter((c) => c.kind === 'deleted'))
     await git.remove({ fs, dir, filepath: change.path }); /*  NOSONAR: index updates of one repo must not overlap  */
-  return git.commit({ fs, dir, message, author });
+  const commit = await git.commit({ fs, dir, message, author });
+  await persist();
+  return commit;
 }
 
 export async function readRepoFile(exercise: ExerciseConfig, variantIndex: number, repoType: RepoType, relPath: string) {
@@ -93,12 +95,14 @@ export async function writeRepoFile(exercise: ExerciseConfig, variantIndex: numb
   const dir = repoDir(exercise, variantIndex, repoType);
   await ensureBaseline(dir);
   await writeFileDeep(`${dir}/${relPath}`, content);
+  await persist();
 }
 
 export async function deleteRepoFile(exercise: ExerciseConfig, variantIndex: number, repoType: RepoType, relPath: string) {
   const dir = repoDir(exercise, variantIndex, repoType);
   await ensureBaseline(dir);
   await removeRecursive(`${dir}/${relPath}`);
+  await persist();
 }
 
 /*  Restore a file to its baseline (or remove it if it was added)  */
@@ -114,6 +118,7 @@ export async function discardFile(exercise: ExerciseConfig, variantIndex: number
       throw error;
     await removeRecursive(`${dir}/${relPath}`);
   }
+  await persist();
 }
 
 export async function variantChanges(exercise: ExerciseConfig, variantIndex: number): Promise<VariantChanges> {

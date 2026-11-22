@@ -1,20 +1,7 @@
 import { execFileSync, spawn } from 'node:child_process';
-import { promises as nodeFs } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
-
-/*  LightningFS stand-in: node fs.promises rooted at a temporary directory  */
-export function chrootedFs(root: () => string) {
-  const chroot = (p: unknown) => (typeof p === 'string' ? path.join(root(), p) : p);
-  const promises = new Proxy({}, {
-    get: (_, name: string) => (...args: unknown[]) => {
-      const mapped = name === 'rename' || name === 'symlink' ? args.map(chroot) : [ chroot(args[0]), ...args.slice(1) ];
-      return (nodeFs as unknown as Record<string, (...a: unknown[]) => unknown>)[name]!(...mapped);
-    },
-  });
-  return { promises };
-}
 
 /*  System Git by absolute path, ignoring the user's config (e.g. commit signing)  */
 const GIT = '/usr/bin/git';

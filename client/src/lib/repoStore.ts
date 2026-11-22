@@ -32,6 +32,10 @@ export function repoDir(exercise: ExerciseConfig, variantIndex: number, repoType
   return `${variantDir(exercise, variantIndex)}/${repoType}`;
 }
 
+/*  LightningFS saves its file index only 500 ms after the last write; persist it right away when an action ends,
+    so a reload or closed tab directly afterwards does not lose the change  */
+export const persist = () => pfs.flush();
+
 export async function pathExists(filepath: string) {
   try {
     await pfs.stat(filepath);
@@ -131,6 +135,7 @@ export async function getRepoStatus(exercise: ExerciseConfig): Promise<RepoStatu
 
 export async function removeRepo(exercise: ExerciseConfig, variantIndex: number, repoType: RepoType) {
   await removeRecursive(repoDir(exercise, variantIndex, repoType));
+  await persist();
 }
 
 /*  Move a stored directory (e.g. after renaming an exercise or variant); refuses to overwrite  */
@@ -141,6 +146,7 @@ export async function moveDir(from: string, to: string) {
     throw new Error(`Repositories already exist at ${to}.`);
   await mkdirp(to.slice(0, to.lastIndexOf('/')));
   await pfs.rename(from, to);
+  await persist();
 }
 
 /*  Origin of an Artemis variant: original export bytes plus baseline problem statement, stored next to its repos  */
@@ -163,6 +169,7 @@ export async function writeArtemisMeta(exercise: ExerciseConfig, variantIndex: n
   await writeFileDeep(artemisMetaPath(exercise, variantIndex), JSON.stringify(meta));
   if (exportBytes)
     await writeFileDeep(artemisExportPath(exercise, variantIndex), exportBytes);
+  await persist();
 }
 
 export async function readArtemisExportBytes(exercise: ExerciseConfig, variantIndex: number) {

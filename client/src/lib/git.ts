@@ -3,7 +3,7 @@ import http from 'isomorphic-git/http/web';
 import type { DownloadResult, ExerciseConfig } from '@/types';
 import { commitAll, type CommitAuthor } from './changes';
 import { getProxyBase } from './config';
-import { fs, mkdirp, removeArtemisMeta, removeRecursive, repoDir, REPO_TYPES, type RepoType } from './repoStore';
+import { fs, mkdirp, persist, removeArtemisMeta, removeRecursive, repoDir, REPO_TYPES, type RepoType } from './repoStore';
 
 /*  Split "https://user:token@host/repo.git" into a credential-free URL and its credentials  */
 function splitCredentials(raw: string) {
@@ -34,6 +34,7 @@ async function cloneRepository(rawUrl: string, dir: string) {
     noTags: true,
     onAuth: auth ? () => auth : undefined,
   });
+  await persist();
 }
 
 /*  Repositories of URL-mode variants that have a URL configured  */
