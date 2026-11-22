@@ -667,11 +667,12 @@ function ComparePage() {
     }
   }, [getReviewKey, exerciseName, compareType]);
 
-  // Reset variant index and editor when switching what is compared
+  // Reset variant index and editor when switching what is compared; the loading state hides the old exercise's files
   useEffect(() => {
     setActiveVariantIndex(0);
     setEditing(null);
-  }, [compareType]);
+    shownCompareType.current = null;
+  }, [compareType, activeExerciseIndex]);
 
   /*  Refreshes after edits keep the current comparison visible instead of showing the loading state  */
   useEffect(() => {
@@ -827,10 +828,11 @@ function ComparePage() {
       const canSwitchVariant = totalVariants > 1;
       const currentVariantLabel = comparison.variantLabels[activeVariantIndex] || '';
 
-      // Filter to only show files where the current variant has actual differences
+      // Filter to only show files where the current variant has actual differences (and the file being edited)
+      const isEditing = (fileComp: FileComparison) => editing?.path === fileComp.relativePath && editing.compareIndex === activeVariantIndex;
       const filesWithDifferencesForVariant = comparison.fileComparisons.filter((fileComp) => {
         const variant = fileComp.variants[activeVariantIndex];
-        return variant?.hasDifference === true;
+        return variant?.hasDifference === true || isEditing(fileComp);
       });
 
       if (filesWithDifferencesForVariant.length === 0) {
@@ -889,7 +891,7 @@ function ComparePage() {
           <div className="space-y-6">
             {filesWithDifferencesForVariant
               .filter((fileComp) => {
-                if (showFilter === 'all') return true;
+                if (showFilter === 'all' || isEditing(fileComp)) return true;
                 const reviewKey = getReviewKey(fileComp.relativePath, currentVariantLabel);
                 const status = reviewStatuses[reviewKey] || 'unchecked';
                 if (showFilter === 'needs-attention') return status === 'needs-attention';
@@ -916,7 +918,7 @@ function ComparePage() {
             })}
             {/* Show message when filter returns no results */}
             {filesWithDifferencesForVariant.filter((fileComp) => {
-              if (showFilter === 'all') return true;
+              if (showFilter === 'all' || isEditing(fileComp)) return true;
               const reviewKey = getReviewKey(fileComp.relativePath, currentVariantLabel);
               const status = reviewStatuses[reviewKey] || 'unchecked';
               if (showFilter === 'needs-attention') return status === 'needs-attention';

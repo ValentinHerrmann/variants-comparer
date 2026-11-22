@@ -14,7 +14,8 @@ vi.mock('@isomorphic-git/lightning-fs', async () => {
 vi.mock('@/lib/config', () => ({ getProxyBase: () => '', getArtemisToken: () => '' }));
 
 const { buildArtemisZip, decideWrite, importArtemisExport, mergeText, parseArtemisExport } = await import('@/lib/artemis');
-const { variantChanges, writeRepoFile } = await import('@/lib/changes');
+const { repoChanges, variantChanges, writeRepoFile } = await import('@/lib/changes');
+const { removeRepo, repoDir } = await import('@/lib/repoStore');
 const { repoZipEntries } = await import('@/lib/importer');
 
 describe('mergeText', () => {
@@ -89,5 +90,24 @@ describe('buildArtemisZip', () => {
     const outer = unzipSync(rebuilt);
     expect(JSON.parse(strFromU8(outer['Exercise-Details-Ex.json']!))).toMatchObject({ id: 42, points: 10, problemStatement: 'New statement' });
     expect(strFromU8(unzipSync(outer['C-Ex-42-2026.zip']!)['notes.txt']!)).toBe('kept');
+  });
+
+  it('keeps the original repo ZIP of a removed repository', async () => {
+    const bytes = exportZip();
+    const original = parseArtemisExport(bytes);
+    await importArtemisExport(exercise, 0, bytes, original);
+    await removeRepo(exercise, 0, 'test');
+    const parsed = parseArtemisExport(await buildArtemisZip(exercise, 0));
+    expect(parsed.repos.test).toEqual(original.repos.test);
+  });
+
+  it('reports an edit saved while the first baseline is being created', async () => {
+    const bytes = exportZip();
+    await importArtemisExport(exercise, 0, bytes, parseArtemisExport(bytes));
+    const dir = repoDir(exercise, 0, 'solution');
+    const baseline = repoChanges(dir);
+    await writeRepoFile(exercise, 0, 'solution', 'src/Main.java', 'edited\n');
+    await baseline;
+    expect(await repoChanges(dir)).toEqual([ { path: 'src/Main.java', kind: 'modified' } ]);
   });
 });

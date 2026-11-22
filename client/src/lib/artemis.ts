@@ -5,7 +5,7 @@ import type { ExerciseConfig } from '@/types';
 import { variantChanges, type FileChange } from './changes';
 import { getArtemisToken, getProxyBase } from './config';
 import { commonRoot, importZipBytes, replaceRepo, repoZipEntries, zipRepo } from './importer';
-import { fs, readArtemisExportBytes, readArtemisMeta, repoDir, REPO_TYPES, writeArtemisMeta, type ArtemisMeta, type RepoType } from './repoStore';
+import { fs, pathExists, readArtemisExportBytes, readArtemisMeta, repoDir, REPO_TYPES, writeArtemisMeta, type ArtemisMeta, type RepoType } from './repoStore';
 
 /*  Artemis "export-instructor-exercise" ZIP: Problem-Statement-*.md, Exercise-Details-*.json and a nested
     <course>-<title>-<id>-<timestamp>.zip holding <course>-<title>-{exercise,solution,tests}.zip repositories
@@ -115,8 +115,10 @@ async function rebuildExportLevel(exercise: ExerciseConfig, variantIndex: number
   const rebuildEntry = async (path: string, data: Uint8Array): Promise<Uint8Array> => {
     const name = baseName(path);
     const repoType = isZip(name) ? repoTypeOfZip(name) : undefined;
-    if (repoType)
+    if (repoType && await pathExists(repoDir(exercise, variantIndex, repoType)))
       return zipRepo(exercise, variantIndex, repoType, commonRoot(Object.keys(unzipSync(data))));
+    if (repoType)
+      return data;
     if (isZip(name) && depth < MAX_ZIP_DEPTH)
       return rebuildExportLevel(exercise, variantIndex, data, problemStatement, depth + 1);
     if (isProblemStatement(name))

@@ -16,9 +16,18 @@ export type VariantChanges = {
 
 const BASELINE_AUTHOR: CommitAuthor = { name: 'Variants Comparer', email: 'variants-comparer@localhost' };
 
-/*  Commit the current files of an imported repo (no .git yet) as its baseline; cloned repos already have one  */
-export async function ensureBaseline(dir: string) {
-  if (await pathExists(`${dir}/.git`))
+async function hasHead(dir: string) {
+  try {
+    await git.resolveRef({ fs, dir, ref: 'HEAD' });
+    return true;
+  }
+  catch {
+    return false;
+  }
+}
+
+async function createBaseline(dir: string) {
+  if (await hasHead(dir))
     return;
   await mkdirp(dir);
   await git.init({ fs, dir, defaultBranch: 'main' });
@@ -26,6 +35,19 @@ export async function ensureBaseline(dir: string) {
   if (paths.length > 0)
     await git.add({ fs, dir, filepath: paths, force: true });
   await git.commit({ fs, dir, message: 'Baseline', author: BASELINE_AUTHOR });
+}
+
+/*  Baselines in progress, so a concurrent edit waits instead of being folded into the baseline commit  */
+const baselines = new Map<string, Promise<void>>();
+
+/*  Commit the current files of an imported repo (no commit yet) as its baseline; cloned repos already have one  */
+export function ensureBaseline(dir: string) {
+  let pending = baselines.get(dir);
+  if (!pending) {
+    pending = createBaseline(dir).finally(() => baselines.delete(dir));
+    baselines.set(dir, pending);
+  }
+  return pending;
 }
 
 /*  With ignored files included, statusMatrix would also list the .git directory itself  */

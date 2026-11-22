@@ -30,6 +30,9 @@ const editorTheme = EditorView.theme({
 
 const editableExtension = (editable: boolean): Extension => [ EditorView.editable.of(editable), EditorState.readOnly.of(!editable) ];
 
+/*  Keep a file's line endings, so saving does not rewrite every line of a CRLF file  */
+const lineSeparatorOf = (content: string | null) => (content?.includes('\r\n') ? '\r\n' : '\n');
+
 /*  Side-by-side editor of a base file and its variant file (CodeMirror merge view, per-chunk copy from base)  */
 export function FileEditor({ fileName, baseLabel, variantLabel, baseContent, variantContent, allowCreateDelete, onSave, onCancel }: Readonly<FileEditorProps>) {
   const parentRef = useRef<HTMLDivElement>(null);
@@ -41,7 +44,11 @@ export function FileEditor({ fileName, baseLabel, variantLabel, baseContent, var
   const [ error, setError ] = useState('');
 
   useEffect(() => {
-    const extensions = (side: Side, initiallyExists: boolean): Extension => [
+    /*  Fresh contents (e.g. after a discard in the pending changes panel) reset the editor state, too  */
+    setExists({ base: baseContent !== null, variant: variantContent !== null });
+    setSaving(false);
+    setError('');
+    const extensions = (side: Side, content: string | null): Extension => [
       lineNumbers(),
       highlightActiveLine(),
       drawSelection(),
@@ -52,11 +59,12 @@ export function FileEditor({ fileName, baseLabel, variantLabel, baseContent, var
       keymap.of([ ...defaultKeymap, ...historyKeymap, indentWithTab ]),
       editorTheme,
       language.current.of([]),
-      editable.current[side].of(editableExtension(initiallyExists)),
+      EditorState.lineSeparator.of(lineSeparatorOf(content)),
+      editable.current[side].of(editableExtension(content !== null)),
     ];
     const view = new MergeView({
-      a: { doc: baseContent ?? '', extensions: extensions('base', baseContent !== null) },
-      b: { doc: variantContent ?? '', extensions: extensions('variant', variantContent !== null) },
+      a: { doc: baseContent ?? '', extensions: extensions('base', baseContent) },
+      b: { doc: variantContent ?? '', extensions: extensions('variant', variantContent) },
       parent: parentRef.current!,
       revertControls: 'a-to-b',
       collapseUnchanged: { margin: 5, minSize: 10 },
@@ -87,7 +95,7 @@ export function FileEditor({ fileName, baseLabel, variantLabel, baseContent, var
     const variant = viewRef.current?.b;
     if (!variant)
       return;
-    variant.dispatch({ changes: { from: 0, to: variant.state.doc.length, insert: base } });
+    variant.dispatch({ changes: { from: 0, to: variant.state.doc.length, insert: base.split('\n').join(variant.state.lineBreak) } });
     setSideExists('variant', true);
   };
 
@@ -95,7 +103,7 @@ export function FileEditor({ fileName, baseLabel, variantLabel, baseContent, var
     const sides: EditedSides = {};
     const original = { base: baseContent, variant: variantContent };
     for (const side of [ 'base', 'variant' ] as const) {
-      const content = exists[side] ? editorOf(side)?.state.doc.toString() ?? '' : null;
+      const content = exists[side] ? editorOf(side)?.state.sliceDoc() ?? '' : null;
       if (content !== original[side])
         sides[side] = content;
     }

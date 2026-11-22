@@ -366,6 +366,11 @@ function ConfigurePage() {
   const anyArtemis = variants.some((v) => v.source === 'artemis');
   const artemisLoadable = variants.flatMap((v, idx) => (v.source === 'artemis' && v.artemisUrl?.trim() && isValidUrl(v.artemisUrl) ? [ idx ] : []));
   const downloadJobs = cloneJobs(currentExercise);
+
+  /*  Cloning drops a variant's Artemis link, so its pending problem statement counts, too  */
+  const downloadPending = downloadJobs.reduce((sum, job) => sum + repoPending(job.index, job.repoType), 0)
+    + [ ...new Set(downloadJobs.map((job) => job.index)) ].filter((index) => pending[index]?.problemStatement).length;
+
   const invalidUrlCount = downloadJobs.filter((job) => !isValidUrl(job.url)).length;
   const downloadBlocker = !hasName ? 'Enter an exercise name first.'
     : downloadJobs.length === 0 ? 'Enter at least one repository URL (variants in "Repository URLs" mode).'
@@ -607,8 +612,8 @@ function ConfigurePage() {
           updateCurrentExercise((ex) => ({
             ...ex,
             exerciseName: name,
-            variants: ex.variants.map((variant, idx) => (idx === variantIndex && parsed.problemStatement !== undefined
-              ? { ...variant, markdown: parsed.problemStatement }
+            variants: ex.variants.map((variant, idx) => (idx === variantIndex
+              ? { ...variant, markdown: parsed.problemStatement ?? '' }
               : variant)),
           }));
           addToast(`${label}: imported ${imported.map(formatRepoType).join(', ')} from Artemis.`, 'success');
@@ -908,7 +913,7 @@ function ConfigurePage() {
       )}
 
       <div className="flex flex-wrap items-center gap-3">
-        <Button variant="secondary" onClick={() => guardPending(downloadJobs.reduce((sum, job) => sum + repoPending(job.index, job.repoType), 0), handleDownload)} disabled={isBusy || !!downloadBlocker}>
+        <Button variant="secondary" onClick={() => guardPending(downloadPending, handleDownload)} disabled={isBusy || !!downloadBlocker}>
           {loading === 'download'
             ? 'Downloading...'
             : `Download ${downloadJobs.length || ''} ${downloadJobs.length === 1 ? 'repository' : 'repositories'}`}
