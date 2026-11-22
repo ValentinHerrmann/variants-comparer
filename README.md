@@ -16,6 +16,7 @@ The **Exam Variants Comparer** helps you manage and compare multiple variants of
 - **Compare differences**: Side-by-side view to check differences between variants
 - **Track review progress**: Mark files as reviewed, correct, or needing attention
 - **Keep notes**: Attach markdown notes to each variant
+- **Fix mistakes in place**: Edit files and problem statements on the Compare page and write the changes back (Git push, Artemis, or ZIP download)
 
 ## Usage
 
@@ -93,16 +94,34 @@ Use **File Mapping** when files have different names or paths across variants:
 - Logically equivalent files that don't share the same path
 - Compare refactored code with original implementation
 
+### 5. Edit and Write Back
+
+Mistakes found while comparing can be fixed directly in the app:
+
+1. On the **Compare** page (view *One variant*), click **Edit** on a file. Both sides open in an editor (Variant 1 left, the compared variant right); the arrows between them copy single changes from Variant 1, **Copy whole file** copies all of it. **Delete file** / **Create file** remove or add a file on either side. In *All variants*, **Edit** switches to the pairwise view of that variant.
+2. **Save** stores the edit in the browser only and resets the review status of the file to unchecked.
+3. The **Pending changes** panel lists all edits per variant (`A`dded / `M`odified / `D`eleted, **Discard** restores one). The Configure page shows `N modified` next to each repository and asks before re-downloading, re-importing or clearing would discard edits.
+4. Write the changes back the way the variant was loaded:
+
+| Loaded via | Write-back |
+|---|---|
+| Repository URL (cloned) | **Push**: commits all edits (message and author asked once, author remembered) and pushes to the cloned branch. If the remote branch has new commits, they are fetched and merged first; on a conflict nothing is pushed and the edits stay pending. |
+| Folder / ZIP import | **Download … ZIP** of the edited repository. |
+| Artemis exercise ZIP | **Download Artemis ZIP**: the original export with edited repositories and problem statement, for *Import from file* in Artemis (this creates a **new** exercise; Artemis cannot update an exercise from a ZIP). |
+| Artemis URL | **Write to Artemis**: fetches the current exercise, merges changes made in Artemis since loading (a conflict aborts before anything is written), writes the files via the Artemis online-editor API (one commit per repository, which triggers a build) and updates the problem statement. Needs editor rights. **Download Artemis ZIP** is offered as a copy. |
+
+> ⚠️ Writing to Artemis commits the shared server-side working copy of the online editor, including uncommitted edits other editors made there.
+
 ## Cloning and the CORS proxy
 
 Browsers cannot talk the Git smart-HTTP protocol to GitHub, GitLab, Artemis etc. directly, because these servers send no CORS headers. Cloning (via [isomorphic-git](https://isomorphic-git.org)) is therefore relayed through a small proxy:
 
-- [client/functions/git-proxy/[[path]].ts](client/functions/git-proxy/[[path]].ts) is a Cloudflare Pages Function, deployed together with the app at `/git-proxy`. It only forwards read-only clone requests (`info/refs?service=git-upload-pack` and `git-upload-pack`) and rejects everything else, so it is no open proxy.
-- [client/functions/artemis-proxy/[[path]].ts](client/functions/artemis-proxy/[[path]].ts) at `/artemis-proxy` only forwards `GET /api/programming/programming-exercises/<id>/export-instructor-exercise` with the `Authorization` header.
+- [client/functions/git-proxy/[[path]].ts](client/functions/git-proxy/[[path]].ts) is a Cloudflare Pages Function, deployed together with the app at `/git-proxy`. It only forwards Git smart-HTTP fetch and push requests (`info/refs?service=git-upload-pack|git-receive-pack`, `git-upload-pack`, `git-receive-pack`) and rejects everything else, so it is no open proxy.
+- [client/functions/artemis-proxy/[[path]].ts](client/functions/artemis-proxy/[[path]].ts) at `/artemis-proxy` only forwards the Artemis endpoints the app uses, with the `Authorization` header: the instructor exercise export, the template/solution participation lookup, the online-editor file and commit endpoints of the template, solution and test repositories, and the problem statement update.
 - CORS is granted to its own origin plus `ALLOWED_ORIGINS`; `ALLOWED_GIT_HOSTS` / `ALLOWED_ARTEMIS_HOSTS` optionally restrict the target hosts (see [client/wrangler.toml](client/wrangler.toml)).
 - The proxy base URL can be changed per browser on the Configure page; leave it empty to fetch directly (only works for hosts that send CORS headers) or use the folder/ZIP imports.
 
-> ⚠️ Access tokens embedded in repository URLs pass through the proxy. Use the hosted proxy only if you trust it, deploy your own, or use folder/ZIP import.
+> ⚠️ Access tokens embedded in repository URLs and the Artemis token pass through the proxy and grant write access (push, Artemis repository writes). Use the hosted proxy only if you trust it, deploy your own, or use folder/ZIP import.
 
 ## Deployment
 
@@ -161,6 +180,6 @@ Build-time environment variables ([client/.env](client/.env)):
 
 ## Tech Stack
 
-**App**: React 19, TypeScript, Vite, TailwindCSS, shadcn/ui, isomorphic-git, LightningFS, fflate, Zod
+**App**: React 19, TypeScript, Vite, TailwindCSS, shadcn/ui, isomorphic-git, LightningFS, fflate, Zod, CodeMirror 6, node-diff3
 **Proxy**: Cloudflare Pages Functions
 **Infrastructure**: Cloudflare Pages, GitHub Pages, Docker + Nginx (static)

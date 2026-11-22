@@ -76,6 +76,7 @@ export type VariantComparison = {
 export type FileComparison = {
   relativePath: string;
   baseContent: string;
+  baseExists: boolean;
   variants: VariantComparison[];
 };
 

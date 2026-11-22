@@ -1,12 +1,19 @@
-import { Fragment, useEffect, useMemo, useState, useRef, useCallback } from 'react';
+import { Fragment, lazy, Suspense, useEffect, useMemo, useState, useRef, useCallback, type ReactNode } from 'react';
 import DiffMatchPatch from 'diff-match-patch';
 
+import { deleteRepoFile, writeRepoFile } from '@/lib/changes';
 import { alignVariants, type AlignedCell, type AlignedRow } from '@/lib/diff';
 import { compare, getReviewStatuses, setReviewStatus } from '@/lib/service';
 import type { CompareType, ComparisonResponse, FileComparison, FileMapping, ReviewStatus, VariantComparison } from '@/types';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import type { EditedSides } from '@/components/FileEditor';
+import { PendingChangesPanel } from '@/components/PendingChangesPanel';
 import { useExercise } from '@/contexts/ExerciseContext';
+import { useToast } from '@/contexts/ToastContext';
+
+/*  CodeMirror is only loaded once a file is edited  */
+const FileEditor = lazy(() => import('@/components/FileEditor').then((module) => ({ default: module.FileEditor })));
 
 const compareOptions: { value: CompareType; label: string }[] = [
   { value: 'problem', label: 'Problem Statement (Markdown)' },
@@ -124,12 +131,14 @@ function AllVariantsFileCard({
   fileMappings,
   reviewStatusFor,
   onReviewStatusChange,
+  onEdit,
 }: Readonly<{
   fileComp: FileComparison;
   baseVariant: string;
   fileMappings: FileMapping[];
   reviewStatusFor: (variantLabel: string) => ReviewStatus;
   onReviewStatusChange: (variantLabel: string, status: ReviewStatus) => void;
+  onEdit: (variantIndex: number) => void;
 }>) {
   const rows = useMemo(() => alignVariants(fileComp.baseContent, fileComp.variants), [ fileComp ]);
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -175,7 +184,7 @@ function AllVariantsFileCard({
             <thead className="sticky top-0 z-10 bg-white shadow-sm">
               <tr className="align-top">
                 <th colSpan={2} className="px-3 py-2 text-left text-sm font-semibold text-slate-700">{baseVariant}</th>
-                {fileComp.variants.map((variant) => {
+                {fileComp.variants.map((variant, variantIndex) => {
                   const mapping = fileMappings.find((m) => m.baseFile === fileComp.relativePath && m.variantLabel === variant.variant);
                   return (
                     <th key={variant.variant} colSpan={2} className="px-3 py-2 text-left font-normal">
@@ -191,6 +200,7 @@ function AllVariantsFileCard({
                         {variant.hasDifference
                           ? <ReviewButtons status={reviewStatusFor(variant.variant)} onChange={(status) => onReviewStatusChange(variant.variant, status)} />
                           : <span className="text-xs text-muted-foreground">identical</span>}
+                        <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => onEdit(variantIndex)}>Edit</Button>
                       </div>
                     </th>
                   );
@@ -233,6 +243,7 @@ function AllVariantsComparison({
   showFilter,
   statusOf,
   onReviewStatusChange,
+  onEdit,
 }: Readonly<{
   fileComparisons: FileComparison[];
   baseVariant: string;
@@ -240,6 +251,7 @@ function AllVariantsComparison({
   showFilter: 'all' | 'needs-attention' | 'unchecked';
   statusOf: (path: string, variantLabel: string) => ReviewStatus;
   onReviewStatusChange: (path: string, variantLabel: string, status: ReviewStatus) => void;
+  onEdit: (path: string, variantIndex: number) => void;
 }>) {
   const filesWithDifferences = fileComparisons.filter((fileComp) => fileComp.variants.some((v) => v.hasDifference));
   if (filesWithDifferences.length === 0)
@@ -280,6 +292,7 @@ function AllVariantsComparison({
             fileMappings={fileMappings}
             reviewStatusFor={(label) => statusOf(fileComp.relativePath, label)}
             onReviewStatusChange={(label, status) => onReviewStatusChange(fileComp.relativePath, label, status)}
+            onEdit={(variantIndex) => onEdit(fileComp.relativePath, variantIndex)}
           />
         ))}
         {visibleFiles.length === 0 && (
@@ -299,6 +312,8 @@ function FileComparisonCard({
   fileMappings = [],
   reviewStatus,
   onReviewStatusChange,
+  onEdit,
+  editor,
 }: { 
   fileComp: FileComparison; 
   baseVariant: string;
@@ -306,6 +321,8 @@ function FileComparisonCard({
   fileMappings?: Array<{ baseFile: string; variantFile: string; variantLabel: string }>;
   reviewStatus: ReviewStatus;
   onReviewStatusChange: (status: ReviewStatus) => void;
+  onEdit: () => void;
+  editor?: ReactNode;
 }) {
   const baseLines = fileComp.baseContent.split('\n');
   const scrollRefs = useRef<(HTMLDivElement | null)[]>([]);
@@ -391,11 +408,12 @@ function FileComparisonCard({
               </div>
             )}
             <ReviewButtons status={reviewStatus} onChange={onReviewStatusChange} />
+            {!editor && <Button variant="outline" size="sm" className="h-7 text-xs" onClick={onEdit}>Edit</Button>}
           </div>
         </div>
       </CardHeader>
       <CardContent>
-        <div className="grid gap-4 lg:grid-cols-2">
+        {editor ?? <div className="grid gap-4 lg:grid-cols-2">
           {/* Base variant column - show removed/modified lines highlighted */}
           <div className="space-y-2">
             <p className="text-sm font-semibold text-slate-700">{baseVariant}</p>
@@ -588,14 +606,15 @@ function FileComparisonCard({
               </table>
             </div>
           </div>
-        </div>
+        </div>}
       </CardContent>
     </Card>
   );
 }
 
 function ComparePage() {
-  const { currentExercise } = useExercise();
+  const { currentExercise, activeExerciseIndex, setExercises } = useExercise();
+  const { addToast } = useToast();
   const [compareType, setCompareType] = useState<CompareType>('problem');
   const [comparison, setComparison] = useState<ComparisonResponse | null>(null);
   const [compareStatus, setCompareStatus] = useState<'idle' | 'loading' | 'error'>('idle');
@@ -604,6 +623,9 @@ function ComparePage() {
   const [reviewStatuses, setReviewStatuses] = useState<Record<string, ReviewStatus>>({});
   const [showFilter, setShowFilter] = useState<'all' | 'needs-attention' | 'unchecked'>('all');
   const [viewMode, setViewMode] = useState<'pairwise' | 'all'>('pairwise');
+  const [editing, setEditing] = useState<{ path: string; compareIndex: number } | null>(null);
+  const [refreshToken, setRefreshToken] = useState(0);
+  const shownCompareType = useRef<CompareType | null>(null);
 
   const exerciseName = currentExercise.exerciseName;
 
@@ -645,19 +667,23 @@ function ComparePage() {
     }
   }, [getReviewKey, exerciseName, compareType]);
 
-  // Reset variant index when comparison data changes
+  // Reset variant index and editor when switching what is compared
   useEffect(() => {
     setActiveVariantIndex(0);
-  }, [comparison]);
+    setEditing(null);
+  }, [compareType]);
 
+  /*  Refreshes after edits keep the current comparison visible instead of showing the loading state  */
   useEffect(() => {
     let cancelled = false;
     const runComparison = async () => {
-      setCompareStatus('loading');
+      if (shownCompareType.current !== compareType)
+        setCompareStatus('loading');
       setCompareError('');
       try {
         const result = await compare(currentExercise, compareType);
         if (!cancelled) {
+          shownCompareType.current = compareType;
           setComparison(result);
           setCompareStatus('idle');
         }
@@ -674,7 +700,67 @@ function ComparePage() {
     return () => {
       cancelled = true;
     };
-  }, [compareType, currentExercise]);
+  }, [compareType, currentExercise, refreshToken]);
+
+  const setVariantMarkdown = useCallback((variantIndex: number, markdown: string) => {
+    setExercises((prev) => prev.map((ex, idx) => (idx !== activeExerciseIndex ? ex : {
+      ...ex,
+      variants: ex.variants.map((variant, vIdx) => (vIdx === variantIndex ? { ...variant, markdown } : variant)),
+    })));
+  }, [activeExerciseIndex, setExercises]);
+
+  /*  Store edits of a base file and its counterpart in the compared variant (index into variantLabels); an edited
+      file needs to be reviewed again, for all variants if the base changed  */
+  const handleSaveEdit = useCallback(async (fileComp: FileComparison, compareIndex: number, sides: EditedSides) => {
+    const variantLabel = comparison?.variantLabels?.[compareIndex] ?? '';
+    const writes: Array<[ number, string, string | null ]> = [];
+    if (sides.base !== undefined)
+      writes.push([ 0, fileComp.relativePath, sides.base ]);
+    if (sides.variant !== undefined) {
+      const mapping = (currentExercise.fileMappings ?? []).find((m) => m.baseFile === fileComp.relativePath && m.variantLabel === variantLabel);
+      writes.push([ compareIndex + 1, mapping?.variantFile ?? fileComp.relativePath, sides.variant ]);
+    }
+    for (const [ variantIndex, path, content ] of writes) {
+      if (compareType === 'problem')
+        setVariantMarkdown(variantIndex, content ?? '');
+      else if (content === null)
+        await deleteRepoFile(currentExercise, variantIndex, compareType, path);
+      else
+        await writeRepoFile(currentExercise, variantIndex, compareType, path, content);
+    }
+    const resetLabels = sides.base !== undefined ? comparison?.variantLabels ?? [] : [ variantLabel ];
+    for (const label of resetLabels)
+      await handleReviewStatusChange(fileComp.relativePath, label, 'unchecked');
+    setEditing(null);
+    setRefreshToken((token) => token + 1);
+  }, [comparison, compareType, currentExercise, handleReviewStatusChange, setVariantMarkdown]);
+
+  const renderEditor = (fileComp: FileComparison, compareIndex: number) => {
+    const variant = fileComp.variants[compareIndex];
+    if (editing?.path !== fileComp.relativePath || editing.compareIndex !== compareIndex || !variant || !comparison)
+      return undefined;
+    return (
+      <Suspense fallback={<p className="text-sm text-muted-foreground">Loading editor...</p>}>
+        <FileEditor
+          fileName={fileComp.relativePath}
+          baseLabel={comparison.baseVariant}
+          variantLabel={variant.variant}
+          baseContent={fileComp.baseExists ? fileComp.baseContent : null}
+          variantContent={variant.exists ? variant.content : null}
+          allowCreateDelete={compareType !== 'problem'}
+          onSave={(sides) => handleSaveEdit(fileComp, compareIndex, sides)}
+          onCancel={() => setEditing(null)}
+        />
+      </Suspense>
+    );
+  };
+
+  /*  Editing happens in the pairwise view of the chosen variant  */
+  const editInPairwiseView = (path: string, compareIndex: number) => {
+    setViewMode('pairwise');
+    setActiveVariantIndex(compareIndex);
+    setEditing({ path, compareIndex });
+  };
 
   const renderConfigSummary = () => {
     if (!exerciseName) {
@@ -734,6 +820,7 @@ function ComparePage() {
             showFilter={showFilter}
             statusOf={(path, label) => reviewStatuses[getReviewKey(path, label)] || 'unchecked'}
             onReviewStatusChange={handleReviewStatusChange}
+            onEdit={editInPairwiseView}
           />
         );
 
@@ -823,6 +910,8 @@ function ComparePage() {
                   fileMappings={currentExercise.fileMappings || []}
                   reviewStatus={reviewStatus}
                   onReviewStatusChange={(status) => handleReviewStatusChange(fileComp.relativePath, currentVariantLabel, status)}
+                  onEdit={() => setEditing({ path: fileComp.relativePath, compareIndex: activeVariantIndex })}
+                  editor={renderEditor(fileComp, activeVariantIndex)}
                 />
               );
             })}
@@ -873,6 +962,14 @@ function ComparePage() {
       </header>
 
       {renderConfigSummary()}
+
+      <PendingChangesPanel
+        exercise={currentExercise}
+        refreshToken={refreshToken}
+        onWritten={() => setRefreshToken((token) => token + 1)}
+        onProblemStatement={setVariantMarkdown}
+        onToast={addToast}
+      />
 
       <Card>
         <CardHeader>

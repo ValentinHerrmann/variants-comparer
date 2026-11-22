@@ -38,6 +38,7 @@ export async function compare(exercise: ExerciseConfig, compareType: CompareType
       fileComparisons: [ {
         relativePath: 'problem.md',
         baseContent: baseMarkdown,
+        baseExists: true,
         variants: compareVariants.map((variant) => {
           const content = variant.markdown || '';
           return {
@@ -83,6 +84,7 @@ export async function compare(exercise: ExerciseConfig, compareType: CompareType
       return {
         relativePath: relPath,
         baseContent,
+        baseExists: baseFiles.has(relPath),
         variants: variantFileMaps.map((variantData) => {
           const content = variantData.files.get(relPath) ?? '';
           const hasDifference = baseContent !== content;

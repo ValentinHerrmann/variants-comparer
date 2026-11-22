@@ -1,5 +1,5 @@
-/*  Cloudflare Pages Function: minimal CORS proxy for read-only Git smart-HTTP (clone/fetch).
-    Request shape (isomorphic-git corsProxy): /git-proxy/<host>/<repo-path>/(info/refs|git-upload-pack)
+/*  Cloudflare Pages Function: minimal CORS proxy for Git smart-HTTP (clone/fetch/push).
+    Request shape (isomorphic-git corsProxy): /git-proxy/<host>/<repo-path>/(info/refs|git-upload-pack|git-receive-pack)
     Env: ALLOWED_ORIGINS (comma list, besides the own origin), ALLOWED_GIT_HOSTS (optional comma list)  */
 
 import { corsHeaders, isValidHost, joinPath, list, relay, type Context } from '../../functions-shared/proxy';
@@ -7,18 +7,20 @@ import { corsHeaders, isValidHost, joinPath, list, relay, type Context } from '.
 const FORWARDED_REQUEST_HEADERS = [ 'accept', 'authorization', 'content-type', 'git-protocol' ];
 const EXPOSED_RESPONSE_HEADERS = [ 'content-type', 'content-length', 'cache-control', 'etag', 'x-redirected-url' ];
 
-/*  Only allow the two read-only smart-HTTP endpoints, so this is no general-purpose open proxy  */
+const GIT_SERVICES = [ 'git-upload-pack', 'git-receive-pack' ];
+
+/*  Only allow the smart-HTTP endpoints of fetch and push, so this is no general-purpose open proxy  */
 function isGitRequest(request: Request, path: string, search: URLSearchParams) {
   if (request.method === 'GET')
-    return path.endsWith('/info/refs') && search.get('service') === 'git-upload-pack';
+    return path.endsWith('/info/refs') && GIT_SERVICES.includes(search.get('service') ?? '');
   if (request.method === 'POST')
-    return path.endsWith('/git-upload-pack')
-      && request.headers.get('content-type') === 'application/x-git-upload-pack-request';
+    return GIT_SERVICES.some((service) => path.endsWith(`/${service}`)
+      && request.headers.get('content-type') === `application/x-${service}-request`);
   return false;
 }
 
 export async function onRequest({ request, env, params }: Context): Promise<Response> {
-  const headers = corsHeaders(request, env, FORWARDED_REQUEST_HEADERS, EXPOSED_RESPONSE_HEADERS);
+  const headers = corsHeaders(request, env, [ 'GET', 'POST' ], FORWARDED_REQUEST_HEADERS, EXPOSED_RESPONSE_HEADERS);
   if (request.method === 'OPTIONS')
     return new Response(null, { status: 204, headers });
 
@@ -28,7 +30,7 @@ export async function onRequest({ request, env, params }: Context): Promise<Resp
   const allowedHosts = list(env.ALLOWED_GIT_HOSTS);
   if (!isValidHost(host) || !isGitRequest(request, path, searchParams)
     || (allowedHosts.length > 0 && !allowedHosts.includes(host)))
-    return new Response('Forbidden: only Git clone/fetch requests are proxied', { status: 403, headers });
+    return new Response('Forbidden: only Git fetch/push requests are proxied', { status: 403, headers });
 
   const upstreamHeaders = new Headers({ 'user-agent': 'git/variants-comparer-proxy' });
   for (const name of FORWARDED_REQUEST_HEADERS) {
