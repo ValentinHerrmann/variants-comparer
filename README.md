@@ -14,7 +14,8 @@ The **Exam Variants Comparer** helps you manage and compare multiple variants of
 - **Clone in the browser**: Download all repositories in one click, or import them from a local folder / ZIP
 - **No backend**: Everything runs and is stored locally in your browser (IndexedDB / localStorage)
 - **Compare differences**: Side-by-side view to check differences between variants
-- **Track review progress**: Mark files as reviewed, correct, or needing attention
+- **Track review progress**: Mark files as reviewed, correct, or needing attention, with an optional comment
+- **Export a review report**: Markdown summary of progress, findings, remaining work and edits, for yourself, as proof, or as hand-over to an AI agent
 - **Keep notes**: Attach markdown notes to each variant
 - **Fix mistakes in place**: Edit files and problem statements on the Compare page and write the changes back (Git push, Artemis, or ZIP download)
 
@@ -50,6 +51,7 @@ Changes are saved automatically; the indicator at the top right shows *All chang
 - **or** import a whole Artemis exercise per variant (see below)
 - Navigate to **Compare** page to review differences
 - On the **Compare** page, **View: One variant** diffs one variant against Variant 1 (cycle with the floating button); **View: All variants** shows Variant 1 and all other variants side by side, with rows aligned on Variant 1 and review buttons per variant
+- The speech-bubble button next to the review buttons adds a **comment** to a file review (e.g. why it needs attention); it is kept when an edit resets the status
 - **Clear downloaded repositories** removes the exercise's repositories from browser storage (after confirmation); the configuration is kept
 
 ### 3. Import Full Artemis Exercises
@@ -111,6 +113,18 @@ Mistakes found while comparing can be fixed directly in the app:
 | Artemis URL | **Write to Artemis**: fetches the current exercise, merges changes made in Artemis since loading (a conflict aborts before anything is written), writes the files via the Artemis online-editor API (one commit per repository, which triggers a build) and updates the problem statement. Needs editor rights. **Download Artemis ZIP** is offered as a copy. |
 
 > ⚠️ Writing to Artemis commits the shared server-side working copy of the online editor, including uncommitted edits other editors made there.
+
+### 6. Export a Review Report
+
+On the **Stats** page, **Export Report** builds a Markdown report of the active exercise or of all exercises:
+
+- **Summary** per variant and content type: differing files, correct, needs attention, unreviewed
+- **Needs attention**, **Not reviewed yet** and **Verified as correct** file lists with review comments
+- **Edits**: changes written back (push, Artemis write, ZIP download; with date, way and commit message) and changes still pending
+
+**Compact** keeps it to statistics and lists (to remember or to show as proof). **Detailed** adds the unified diffs of open files and edits plus a context block for AI agents, so the report can be pasted into an LLM to continue the consistency review. Preview the report, then **Copy to clipboard** or **Download .md**.
+
+> Written-back edits are recorded in browser storage next to the variant's repositories; **Clear downloaded repositories** removes them, too.
 
 ## Cloning and the CORS proxy
 

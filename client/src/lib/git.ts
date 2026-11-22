@@ -1,7 +1,7 @@
 import git, { clone, Errors } from 'isomorphic-git';
 import http from 'isomorphic-git/http/web';
 import type { DownloadResult, ExerciseConfig } from '@/types';
-import { commitAll, type CommitAuthor } from './changes';
+import { appendEditLog, commitAll, pendingEdits, type CommitAuthor } from './changes';
 import { getProxyBase } from './config';
 import { fs, mkdirp, persist, removeArtemisMeta, removeRecursive, repoDir, REPO_TYPES, type RepoType } from './repoStore';
 
@@ -104,26 +104,28 @@ export async function pushRepo(exercise: ExerciseConfig, variantIndex: number, r
   if (!branch)
     throw new Error('The repository has no checked out branch.');
   const baseline = await git.resolveRef({ fs, dir, ref: branch });
+  const edits = await pendingEdits(exercise, variantIndex, [ repoType ], false);
   const commit = await commitAll(dir, message, author);
   if (!commit)
     return 'unchanged';
+  let outcome: PushOutcome = 'pushed';
   try {
-    if (await tryPush(remote, branch))
-      return 'pushed';
-    await git.fetch({ ...remote, ref: branch, singleBranch: true, tags: false });
-    await git.merge({
-      fs,
-      dir,
-      ours: branch,
-      theirs: `refs/remotes/origin/${branch}`,
-      abortOnConflict: true,
-      author,
-      message: `Merge remote-tracking branch 'origin/${branch}'`,
-    });
-    await git.checkout({ fs, dir, ref: branch, force: true });
-    if (await tryPush(remote, branch))
-      return 'merged';
-    throw new Error('Push rejected again: the remote branch changed during the merge.');
+    if (!(await tryPush(remote, branch))) {
+      await git.fetch({ ...remote, ref: branch, singleBranch: true, tags: false });
+      await git.merge({
+        fs,
+        dir,
+        ours: branch,
+        theirs: `refs/remotes/origin/${branch}`,
+        abortOnConflict: true,
+        author,
+        message: `Merge remote-tracking branch 'origin/${branch}'`,
+      });
+      await git.checkout({ fs, dir, ref: branch, force: true });
+      if (!(await tryPush(remote, branch)))
+        throw new Error('Push rejected again: the remote branch changed during the merge.');
+      outcome = 'merged';
+    }
   }
   catch (error) {
     await restorePending(dir, branch, commit, baseline);
@@ -133,4 +135,6 @@ export async function pushRepo(exercise: ExerciseConfig, variantIndex: number, r
       throw new Error('Remote changes cannot be merged automatically with your edits. Your edits stay pending.');
     throw error;
   }
+  await appendEditLog(exercise, variantIndex, `Git push (${repoType})`, edits, message);
+  return outcome;
 }
