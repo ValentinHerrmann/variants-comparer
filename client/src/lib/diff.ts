@@ -1,5 +1,5 @@
 import { diffChars, diffLines } from 'diff';
-import type { LineDiff } from '@/types';
+import type { LineDiff, VariantComparison } from '@/types';
 
 export function computeLineDiff(baseContent: string, variantContent: string): LineDiff[] {
   const changes = diffLines(baseContent, variantContent);
@@ -179,4 +179,60 @@ export function calculateSimilarity(content1: string, content2: string): number 
   // instead of totalChars which double-counts differences
   const maxLength = Math.max(content1.length, content2.length);
   return maxLength > 0 ? Math.round((matchingChars / maxLength) * 100) : 0;
+}
+
+export type AlignedCell = { text: string; lineNo: number; type: LineDiff['type'] };
+
+export type AlignedRow = {
+  id: string;
+  base?: { text: string; lineNo: number; changed: boolean };
+  cells: Array<AlignedCell | undefined>;
+};
+
+/*  Align all variants on the base lines: variant insertions become gap rows,
+    padded to the longest insertion across variants  */
+export function alignVariants(baseContent: string, variants: VariantComparison[]): AlignedRow[] {
+  /*  Split like computeLineDiff: no line for the final newline  */
+  const baseLines = baseContent === '' ? [] : baseContent.replace(/\n$/, '').split('\n');
+  const n = baseLines.length;
+
+  /*  Per variant: insertions before base line k (k = n: trailing) and the cell at base line k  */
+  const slots = variants.map((variant) => {
+    const inserts: string[][] = Array.from({ length: n + 1 }, () => []);
+    const atBase: Array<{ text?: string; type: LineDiff['type'] }> = baseLines.map((line) => ({ text: line, type: 'equal' }));
+    if (variant.lineDiff.length > 0) {
+      let k = 0;
+      for (const d of variant.lineDiff) {
+        if (d.type === 'add')
+          inserts[Math.min(k, n)]!.push(d.variant ?? '');
+        else if (k < n)
+          atBase[k++] = { text: d.type === 'remove' ? undefined : d.variant ?? '', type: d.type };
+      }
+    }
+    return { inserts, atBase };
+  });
+
+  const rows: AlignedRow[] = [];
+  const lineNos = variants.map(() => 0);
+  let baseLineNo = 0;
+  for (let k = 0; k <= n; k++) {
+    const gap = Math.max(0, ...slots.map((s) => s.inserts[k]!.length));
+    for (let g = 0; g < gap; g++)
+      rows.push({ id: `gap-${k}-${g}`, cells: slots.map((s, v) => {
+        const text = s.inserts[k]![g];
+        return text === undefined ? undefined : { text, lineNo: ++lineNos[v]!, type: 'add' };
+      }) });
+    if (k === n)
+      break;
+    const cells = slots.map((s, v) => {
+      const cell = s.atBase[k]!;
+      return cell.text === undefined ? undefined : { text: cell.text, lineNo: ++lineNos[v]!, type: cell.type };
+    });
+    rows.push({
+      id: `base-${k}`,
+      base: { text: baseLines[k]!, lineNo: ++baseLineNo, changed: slots.some((s) => s.atBase[k]!.type !== 'equal') },
+      cells,
+    });
+  }
+  return rows;
 }

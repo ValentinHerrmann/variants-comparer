@@ -48,6 +48,7 @@ Changes are saved automatically; the indicator at the top right shows *All chang
 - Click **Download N repositories** to clone all configured repository URLs, **or** use **or import: Folder / ZIP** below each URL field to load a repository you cloned or downloaded yourself (no proxy needed)
 - **or** import a whole Artemis exercise per variant (see below)
 - Navigate to **Compare** page to review differences
+- On the **Compare** page, **View: One variant** diffs one variant against Variant 1 (cycle with the floating button); **View: All variants** shows Variant 1 and all other variants side by side, with rows aligned on Variant 1 and review buttons per variant
 - **Clear downloaded repositories** removes the exercise's repositories from browser storage (after confirmation); the configuration is kept
 
 ### 3. Import Full Artemis Exercises
