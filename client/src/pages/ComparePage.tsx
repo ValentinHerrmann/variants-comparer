@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useState, useRef, useCallback } from 'react';
 import DiffMatchPatch from 'diff-match-patch';
 
-import { alignVariants } from '@/lib/diff';
+import { alignVariants, type AlignedCell, type AlignedRow } from '@/lib/diff';
 import { compare, getReviewStatuses, setReviewStatus } from '@/lib/service';
 import type { CompareType, ComparisonResponse, FileComparison, FileMapping, ReviewStatus, VariantComparison } from '@/types';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -43,7 +43,7 @@ function getInlineDiff(text1: string, text2: string): { left: CharSegment[]; rig
   return { left, right };
 }
 
-function ReviewButtons({ status, onChange }: { status: ReviewStatus; onChange: (status: ReviewStatus) => void }) {
+function ReviewButtons({ status, onChange }: Readonly<{ status: ReviewStatus; onChange: (status: ReviewStatus) => void }>) {
   return (
     <div className="flex items-center gap-1 ml-2">
       <button
@@ -78,7 +78,7 @@ function ReviewButtons({ status, onChange }: { status: ReviewStatus; onChange: (
   );
 }
 
-function DiffCounts({ variant }: { variant: VariantComparison }) {
+function DiffCounts({ variant }: Readonly<{ variant: VariantComparison }>) {
   const added = variant.lineDiff.filter(d => d.type === 'add').length;
   const removed = variant.lineDiff.filter(d => d.type === 'remove').length;
   const modified = variant.lineDiff.filter(d => d.type === 'modify').length;
@@ -91,6 +91,32 @@ function DiffCounts({ variant }: { variant: VariantComparison }) {
   );
 }
 
+const cellBgClass: Record<AlignedCell['type'], string> = { add: 'bg-green-100', modify: 'bg-yellow-50', equal: '', remove: '' };
+
+function baseBgClass(row: AlignedRow) {
+  if (!row.base)
+    return 'bg-slate-50/30';
+  return row.base.changed ? 'bg-yellow-50' : '';
+}
+
+/*  Variant cell text; modified lines get char-level insert highlights, keyed by text offset  */
+function renderCellContent(row: AlignedRow, cell: AlignedCell | undefined) {
+  if (!cell)
+    return '\u00a0';
+  if (cell.type !== 'modify' || !row.base)
+    return cell.text || ' ';
+  let offset = 0;
+  return getInlineDiff(row.base.text, cell.text).right.map((segment) => {
+    const key = offset;
+    offset += segment.text.length;
+    return (
+      <span key={key} className={segment.type === 'insert' ? 'bg-green-600 text-white' : ''}>
+        {segment.text}
+      </span>
+    );
+  });
+}
+
 /*  Base and all variants side by side in one table, rows aligned on the base lines  */
 function AllVariantsFileCard({
   fileComp,
@@ -98,13 +124,13 @@ function AllVariantsFileCard({
   fileMappings,
   reviewStatusFor,
   onReviewStatusChange,
-}: {
+}: Readonly<{
   fileComp: FileComparison;
   baseVariant: string;
   fileMappings: FileMapping[];
   reviewStatusFor: (variantLabel: string) => ReviewStatus;
   onReviewStatusChange: (variantLabel: string, status: ReviewStatus) => void;
-}) {
+}>) {
   const rows = useMemo(() => alignVariants(fileComp.baseContent, fileComp.variants), [ fileComp ]);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const firstDiffRef = useRef<HTMLTableRowElement | null>(null);
@@ -118,14 +144,15 @@ function AllVariantsFileCard({
 
   const differing = fileComp.variants.filter((v) => v.hasDifference);
   const statuses = differing.map((v) => reviewStatusFor(v.variant));
-  const borderColorClass =
-    statuses.includes('needs-attention') ? 'border-red-500 border-2' :
-    statuses.length > 0 && statuses.every((s) => s === 'correct') ? 'border-green-500 border-2' :
-    'border-slate-300';
+  let borderColorClass = 'border-slate-300';
+  if (statuses.includes('needs-attention'))
+    borderColorClass = 'border-red-500 border-2';
+  else if (statuses.length > 0 && statuses.every((s) => s === 'correct'))
+    borderColorClass = 'border-green-500 border-2';
 
   const lineNoCell = (lineNo?: number) => (
     <td className="w-8 px-2 py-0.5 text-right text-slate-400 select-none border-x border-slate-200 bg-slate-50 h-6">
-      {lineNo ?? ' '}
+      {lineNo ?? '\u00a0'}
     </td>
   );
 
@@ -138,8 +165,8 @@ function AllVariantsFileCard({
         <div ref={scrollRef} className="max-h-[600px] overflow-auto rounded-md bg-white border border-slate-200 shadow-inner">
           <table className="w-full text-xs font-mono table-fixed">
             <colgroup>
-              {[ baseVariant, ...fileComp.variants ].map((_, idx) => (
-                <Fragment key={idx}>
+              {[ baseVariant, ...fileComp.variants.map((v) => v.variant) ].map((label) => (
+                <Fragment key={label}>
                   <col className="w-10" />
                   <col />
                 </Fragment>
@@ -172,24 +199,18 @@ function AllVariantsFileCard({
             </thead>
             <tbody>
               {rows.map((row, idx) => (
-                <tr key={idx} ref={idx === firstDiffIndex ? firstDiffRef : undefined} className="h-6">
+                <tr key={row.id} ref={idx === firstDiffIndex ? firstDiffRef : undefined} className="h-6">
                   {lineNoCell(row.base?.lineNo)}
-                  <td className={`px-3 py-0.5 whitespace-pre-wrap break-all ${!row.base ? 'bg-slate-50/30' : row.base.changed ? 'bg-yellow-50' : ''}`}>
-                    {row.base ? row.base.text || ' ' : ' '}
+                  <td className={`px-3 py-0.5 whitespace-pre-wrap break-all ${baseBgClass(row)}`}>
+                    {row.base ? row.base.text || ' ' : '\u00a0'}
                   </td>
-                  {row.cells.map((cell, v) => {
-                    const bgClass = !cell ? 'bg-slate-50/30' : cell.type === 'add' ? 'bg-green-100' : cell.type === 'modify' ? 'bg-yellow-50' : '';
+                  {fileComp.variants.map((variant, v) => {
+                    const cell = row.cells[v];
                     return (
-                      <Fragment key={v}>
+                      <Fragment key={variant.variant}>
                         {lineNoCell(cell?.lineNo)}
-                        <td className={`px-3 py-0.5 whitespace-pre-wrap break-all ${bgClass}`}>
-                          {!cell ? ' ' : cell.type === 'modify' && row.base
-                            ? getInlineDiff(row.base.text, cell.text).right.map((segment, segIdx) => (
-                              <span key={segIdx} className={segment.type === 'insert' ? 'bg-green-600 text-white' : ''}>
-                                {segment.text}
-                              </span>
-                            ))
-                            : cell.text || ' '}
+                        <td className={`px-3 py-0.5 whitespace-pre-wrap break-all ${cell ? cellBgClass[cell.type] : 'bg-slate-50/30'}`}>
+                          {renderCellContent(row, cell)}
                         </td>
                       </Fragment>
                     );
@@ -201,6 +222,73 @@ function AllVariantsFileCard({
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+/*  File list of the "All variants" view; review stats and filter cover all (file, differing variant) pairs  */
+function AllVariantsComparison({
+  fileComparisons,
+  baseVariant,
+  fileMappings,
+  showFilter,
+  statusOf,
+  onReviewStatusChange,
+}: Readonly<{
+  fileComparisons: FileComparison[];
+  baseVariant: string;
+  fileMappings: FileMapping[];
+  showFilter: 'all' | 'needs-attention' | 'unchecked';
+  statusOf: (path: string, variantLabel: string) => ReviewStatus;
+  onReviewStatusChange: (path: string, variantLabel: string, status: ReviewStatus) => void;
+}>) {
+  const filesWithDifferences = fileComparisons.filter((fileComp) => fileComp.variants.some((v) => v.hasDifference));
+  if (filesWithDifferences.length === 0)
+    return <p className="text-sm text-muted-foreground">No differences detected.</p>;
+
+  const statusesOf = (fileComp: FileComparison) =>
+    fileComp.variants.filter((v) => v.hasDifference).map((v) => statusOf(fileComp.relativePath, v.variant));
+  const allStats = { unchecked: 0, correct: 0, 'needs-attention': 0 } as Record<ReviewStatus, number>;
+  for (const fileComp of filesWithDifferences)
+    for (const status of statusesOf(fileComp))
+      allStats[status]++;
+  const visibleFiles = filesWithDifferences.filter((fileComp) =>
+    showFilter === 'all' || statusesOf(fileComp).includes(showFilter));
+
+  return (
+    <>
+      <div className="flex items-center gap-4 text-sm">
+        <span className="text-muted-foreground">Review progress:</span>
+        <span className="flex items-center gap-1">
+          <span className="inline-block w-3 h-3 rounded-full bg-green-500"></span>
+          <span className="text-green-700 font-medium">{allStats.correct} correct</span>
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="inline-block w-3 h-3 rounded-full bg-red-500"></span>
+          <span className="text-red-700 font-medium">{allStats['needs-attention']} need attention</span>
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="inline-block w-3 h-3 rounded-full bg-slate-300"></span>
+          <span className="text-slate-600">{allStats.unchecked} unchecked</span>
+        </span>
+      </div>
+      <div className="space-y-6">
+        {visibleFiles.map((fileComp) => (
+          <AllVariantsFileCard
+            key={fileComp.relativePath}
+            fileComp={fileComp}
+            baseVariant={baseVariant}
+            fileMappings={fileMappings}
+            reviewStatusFor={(label) => statusOf(fileComp.relativePath, label)}
+            onReviewStatusChange={(label, status) => onReviewStatusChange(fileComp.relativePath, label, status)}
+          />
+        ))}
+        {visibleFiles.length === 0 && (
+          <p className="text-sm text-muted-foreground text-center py-8">
+            No files match the current filter.
+          </p>
+        )}
+      </div>
+    </>
   );
 }
 
@@ -637,59 +725,17 @@ function ComparePage() {
         return null;
       }
       
-      if (viewMode === 'all') {
-        const statusOf = (path: string, label: string) => reviewStatuses[getReviewKey(path, label)] || 'unchecked';
-        const filesWithDifferences = comparison.fileComparisons.filter((fileComp) => fileComp.variants.some((v) => v.hasDifference));
-        if (filesWithDifferences.length === 0)
-          return <p className="text-sm text-muted-foreground">No differences detected.</p>;
-
-        /*  Review stats and filter over all (file, differing variant) pairs  */
-        const statusesOf = (fileComp: FileComparison) =>
-          fileComp.variants.filter((v) => v.hasDifference).map((v) => statusOf(fileComp.relativePath, v.variant));
-        const allStats = { unchecked: 0, correct: 0, 'needs-attention': 0 } as Record<ReviewStatus, number>;
-        for (const fileComp of filesWithDifferences)
-          for (const status of statusesOf(fileComp))
-            allStats[status]++;
-        const visibleFiles = filesWithDifferences.filter((fileComp) =>
-          showFilter === 'all' || statusesOf(fileComp).includes(showFilter));
-
+      if (viewMode === 'all')
         return (
-          <>
-            <div className="flex items-center gap-4 text-sm">
-              <span className="text-muted-foreground">Review progress:</span>
-              <span className="flex items-center gap-1">
-                <span className="inline-block w-3 h-3 rounded-full bg-green-500"></span>
-                <span className="text-green-700 font-medium">{allStats.correct} correct</span>
-              </span>
-              <span className="flex items-center gap-1">
-                <span className="inline-block w-3 h-3 rounded-full bg-red-500"></span>
-                <span className="text-red-700 font-medium">{allStats['needs-attention']} need attention</span>
-              </span>
-              <span className="flex items-center gap-1">
-                <span className="inline-block w-3 h-3 rounded-full bg-slate-300"></span>
-                <span className="text-slate-600">{allStats.unchecked} unchecked</span>
-              </span>
-            </div>
-            <div className="space-y-6">
-              {visibleFiles.map((fileComp) => (
-                <AllVariantsFileCard
-                  key={fileComp.relativePath}
-                  fileComp={fileComp}
-                  baseVariant={comparison.baseVariant}
-                  fileMappings={currentExercise.fileMappings || []}
-                  reviewStatusFor={(label) => statusOf(fileComp.relativePath, label)}
-                  onReviewStatusChange={(label, status) => handleReviewStatusChange(fileComp.relativePath, label, status)}
-                />
-              ))}
-              {visibleFiles.length === 0 && (
-                <p className="text-sm text-muted-foreground text-center py-8">
-                  No files match the current filter.
-                </p>
-              )}
-            </div>
-          </>
+          <AllVariantsComparison
+            fileComparisons={comparison.fileComparisons}
+            baseVariant={comparison.baseVariant}
+            fileMappings={currentExercise.fileMappings || []}
+            showFilter={showFilter}
+            statusOf={(path, label) => reviewStatuses[getReviewKey(path, label)] || 'unchecked'}
+            onReviewStatusChange={handleReviewStatusChange}
+          />
         );
-      }
 
       const totalVariants = comparison.variantLabels.length;
       const canSwitchVariant = totalVariants > 1;

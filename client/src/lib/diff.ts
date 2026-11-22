@@ -184,6 +184,7 @@ export function calculateSimilarity(content1: string, content2: string): number 
 export type AlignedCell = { text: string; lineNo: number; type: LineDiff['type'] };
 
 export type AlignedRow = {
+  id: string;
   base?: { text: string; lineNo: number; changed: boolean };
   cells: Array<AlignedCell | undefined>;
 };
@@ -217,7 +218,7 @@ export function alignVariants(baseContent: string, variants: VariantComparison[]
   for (let k = 0; k <= n; k++) {
     const gap = Math.max(0, ...slots.map((s) => s.inserts[k]!.length));
     for (let g = 0; g < gap; g++)
-      rows.push({ cells: slots.map((s, v) => {
+      rows.push({ id: `gap-${k}-${g}`, cells: slots.map((s, v) => {
         const text = s.inserts[k]![g];
         return text === undefined ? undefined : { text, lineNo: ++lineNos[v]!, type: 'add' };
       }) });
@@ -228,6 +229,7 @@ export function alignVariants(baseContent: string, variants: VariantComparison[]
       return cell.text === undefined ? undefined : { text: cell.text, lineNo: ++lineNos[v]!, type: cell.type };
     });
     rows.push({
+      id: `base-${k}`,
       base: { text: baseLines[k]!, lineNo: ++baseLineNo, changed: slots.some((s) => s.atBase[k]!.type !== 'equal') },
       cells,
     });
