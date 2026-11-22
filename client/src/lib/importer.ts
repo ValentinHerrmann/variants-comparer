@@ -1,6 +1,6 @@
 import { unzipSync, zipSync } from 'fflate';
 import type { ExerciseConfig } from '@/types';
-import { exerciseDir, fs, listFilePaths, removeArtemisMeta, removeRecursive, repoDir, writeFileDeep, type RepoType } from './repoStore';
+import { exerciseDir, fs, listFilePaths, persist, removeArtemisMeta, removeRecursive, repoDir, writeFileDeep, type RepoType } from './repoStore';
 
 const ignoredPath = /(^|\/)(\.git|node_modules|__MACOSX)(\/|$)/;
 
@@ -14,6 +14,7 @@ export async function replaceRepo(dir: string, entries: Array<[ string, Uint8Arr
   await removeRecursive(dir);
   for (const [ relPath, data ] of entries)
     await writeFileDeep(`${dir}/${relPath}`, data);
+  await persist();
   return entries.length;
 }
 
@@ -57,4 +58,5 @@ export async function zipRepo(exercise: ExerciseConfig, variantIndex: number, re
 /*  Delete all downloaded/imported repositories of an exercise  */
 export async function clearExerciseRepos(exercise: ExerciseConfig) {
   await removeRecursive(exerciseDir(exercise));
+  await persist();
 }

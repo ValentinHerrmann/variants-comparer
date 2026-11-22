@@ -6,12 +6,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import type { ExerciseConfig } from '@/types';
 import { gitCli, startGitServer } from './helpers';
 
-const roots = vi.hoisted(() => ({ browser: '' }));
-
-vi.mock('@isomorphic-git/lightning-fs', async () => {
-  const { chrootedFs } = await import('./helpers');
-  return { default: class { promises = chrootedFs(() => roots.browser).promises; } };
-});
+import 'fake-indexeddb/auto';
 vi.mock('@/lib/config', () => ({ getProxyBase: () => '' }));
 
 const { cloneExercise, pushRepo } = await import('@/lib/git');
@@ -26,7 +21,7 @@ let work: string;
 
 function exerciseFor(url: string): ExerciseConfig {
   const variant = { label: 'A', testRepo: '', solutionRepo: url, templateRepo: '', markdown: '', courseLink: '', source: 'urls' as const };
-  return { targetFolder: 'x', exerciseName: 'Ex', variants: [ variant ], fileMappings: [] };
+  return { targetFolder: 'x', exerciseName: `Ex${exerciseCounter}`, variants: [ variant ], fileMappings: [] };
 }
 
 /*  Commit a change to the remote from an independent clone  */
@@ -48,10 +43,11 @@ afterAll(() => {
 });
 
 let exercise: ExerciseConfig;
+let exerciseCounter = 0;
 
 beforeEach(async () => {
-  roots.browser = mkdtempSync(path.join(tmpdir(), 'vc-browser-'));
   const name = `repo-${Date.now()}.git`;
+  exerciseCounter++;
   gitCli(remoteRoot, 'init', '-q', '--bare', '-b', 'main', name);
   gitCli(path.join(remoteRoot, name), 'config', 'http.receivepack', 'true');
   work = mkdtempSync(path.join(tmpdir(), 'vc-work-'));

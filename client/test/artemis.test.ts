@@ -1,16 +1,8 @@
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ExerciseConfig } from '@/types';
 
-const roots = vi.hoisted(() => ({ browser: '' }));
-
-vi.mock('@isomorphic-git/lightning-fs', async () => {
-  const { chrootedFs } = await import('./helpers');
-  return { default: class { promises = chrootedFs(() => roots.browser).promises; } };
-});
+import 'fake-indexeddb/auto';
 vi.mock('@/lib/config', () => ({ getProxyBase: () => '', getArtemisToken: () => '' }));
 
 const { buildArtemisZip, decideWrite, importArtemisExport, mergeText, parseArtemisExport } = await import('@/lib/artemis');
@@ -62,11 +54,11 @@ describe('buildArtemisZip', () => {
     }),
   });
   let exercise: ExerciseConfig;
+  let exerciseCounter = 0;
 
   beforeEach(() => {
-    roots.browser = mkdtempSync(path.join(tmpdir(), 'vc-artemis-'));
     const variant = { label: 'A', testRepo: '', solutionRepo: '', templateRepo: '', markdown: '', courseLink: '', source: 'artemis' as const };
-    exercise = { targetFolder: 'x', exerciseName: 'Ex', variants: [ variant ], fileMappings: [] };
+    exercise = { targetFolder: 'x', exerciseName: `Ex${++exerciseCounter}`, variants: [ variant ], fileMappings: [] };
   });
 
   it('round-trips edits and the problem statement into the export structure', async () => {
