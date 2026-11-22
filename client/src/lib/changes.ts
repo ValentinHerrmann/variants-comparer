@@ -1,6 +1,7 @@
+import { createTwoFilesPatch } from 'diff';
 import git from 'isomorphic-git';
 import type { ExerciseConfig } from '@/types';
-import { fs, listFilePaths, mkdirp, pathExists, persist, readArtemisMeta, removeRecursive, repoDir, REPO_TYPES, writeFileDeep, type RepoType } from './repoStore';
+import { fs, listFilePaths, mkdirp, pathExists, persist, readArtemisMeta, removeRecursive, repoDir, REPO_TYPES, variantDir, writeFileDeep, type RepoType } from './repoStore';
 
 /*  Local change tracking: every stored repo is a Git repo whose HEAD is the baseline last pulled or written back  */
 
@@ -13,6 +14,12 @@ export type VariantChanges = {
   problemStatement: boolean;
   count: number;
 };
+
+/*  A pending or written-back edit of one file (or of the problem statement) as unified diff  */
+export type FileEdit = { repoType: RepoType | 'problem'; path: string; kind: ChangeKind; patch: string };
+
+/*  One write-back (push, Artemis write, ZIP download) of a variant, kept for the review report  */
+export type EditLogEntry = { at: string; via: string; message?: string; edits: FileEdit[] };
 
 const BASELINE_AUTHOR: CommitAuthor = { name: 'Variants Comparer', email: 'variants-comparer@localhost' };
 
@@ -141,4 +148,56 @@ export async function repoRemoteUrl(dir: string) {
   if (!(await pathExists(`${dir}/.git`)))
     return undefined;
   return await git.getConfig({ fs, dir, path: 'remote.origin.url' }) as string | undefined;
+}
+
+/*  Unified diff of one file, without the "=====" separator line of jsdiff  */
+export function unifiedPatch(path: string, before: string, after: string) {
+  return createTwoFilesPatch(`a/${path}`, `b/${path}`, before, after, undefined, undefined, { context: 3 })
+    .replace(/^=+\n/, '');
+}
+
+async function headContent(dir: string, filepath: string) {
+  try {
+    const oid = await git.resolveRef({ fs, dir, ref: 'HEAD' });
+    const { blob } = await git.readBlob({ fs, dir, oid, filepath });
+    return new TextDecoder().decode(blob);
+  }
+  catch {
+    return '';
+  }
+}
+
+/*  Pending edits of the given repos of a variant (plus its Artemis problem statement) as unified diffs  */
+export async function pendingEdits(exercise: ExerciseConfig, variantIndex: number, repoTypes: RepoType[] = REPO_TYPES, withProblem = true) {
+  const edits: FileEdit[] = [];
+  for (const repoType of repoTypes) {
+    const dir = repoDir(exercise, variantIndex, repoType);
+    for (const change of await repoChanges(dir)) {
+      const before = change.kind === 'added' ? '' : await headContent(dir, change.path);
+      const after = change.kind === 'deleted' ? '' : await fs.promises.readFile(`${dir}/${change.path}`, 'utf8') as string;
+      edits.push({ repoType, path: change.path, kind: change.kind, patch: unifiedPatch(change.path, before, after) });
+    }
+  }
+  const meta = withProblem ? await readArtemisMeta(exercise, variantIndex) : undefined;
+  const markdown = exercise.variants[variantIndex]?.markdown ?? '';
+  if (meta && meta.problemStatement !== markdown)
+    edits.push({ repoType: 'problem', path: 'problem.md', kind: 'modified', patch: unifiedPatch('problem.md', meta.problemStatement, markdown) });
+  return edits;
+}
+
+const editLogPath = (exercise: ExerciseConfig, variantIndex: number) => `${variantDir(exercise, variantIndex)}/.edits.json`;
+
+export async function readEditLog(exercise: ExerciseConfig, variantIndex: number): Promise<EditLogEntry[]> {
+  const path = editLogPath(exercise, variantIndex);
+  return (await pathExists(path)) ? JSON.parse(await fs.promises.readFile(path, 'utf8') as string) as EditLogEntry[] : [];
+}
+
+/*  Record written-back edits next to the variant's repos (survives re-downloads, moves on renames)  */
+export async function appendEditLog(exercise: ExerciseConfig, variantIndex: number, via: string, edits: FileEdit[], message?: string) {
+  if (edits.length === 0)
+    return;
+  const log = await readEditLog(exercise, variantIndex);
+  log.push({ at: new Date().toISOString(), via, ...(message ? { message } : {}), edits });
+  await writeFileDeep(editLogPath(exercise, variantIndex), JSON.stringify(log));
+  await persist();
 }

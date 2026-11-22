@@ -3,7 +3,7 @@ import DiffMatchPatch from 'diff-match-patch';
 
 import { deleteRepoFile, writeRepoFile } from '@/lib/changes';
 import { alignVariants, type AlignedCell, type AlignedRow } from '@/lib/diff';
-import { compare, getReviewStatuses, setReviewStatus } from '@/lib/service';
+import { compare, getReviewStatuses, setReviewComment, setReviewStatus } from '@/lib/service';
 import type { CompareType, ComparisonResponse, FileComparison, FileMapping, ReviewStatus, VariantComparison } from '@/types';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -50,9 +50,20 @@ function getInlineDiff(text1: string, text2: string): { left: CharSegment[]; rig
   return { left, right };
 }
 
-function ReviewButtons({ status, onChange }: Readonly<{ status: ReviewStatus; onChange: (status: ReviewStatus) => void }>) {
+function ReviewButtons({ status, onChange, comment, onCommentChange }: Readonly<{
+  status: ReviewStatus;
+  onChange: (status: ReviewStatus) => void;
+  comment: string;
+  onCommentChange: (comment: string) => void;
+}>) {
+  const [ draft, setDraft ] = useState<string | null>(null);
+  const saveComment = () => {
+    if (draft !== null)
+      onCommentChange(draft.trim());
+    setDraft(null);
+  };
   return (
-    <div className="flex items-center gap-1 ml-2">
+    <div className="relative flex items-center gap-1 ml-2">
       <button
         onClick={() => onChange(status === 'correct' ? 'unchecked' : 'correct')}
         className={`p-1.5 rounded-md transition-colors ${
@@ -81,6 +92,41 @@ function ReviewButtons({ status, onChange }: Readonly<{ status: ReviewStatus; on
           <line x1="12" y1="16" x2="12.01" y2="16"></line>
         </svg>
       </button>
+      <button
+        onClick={() => setDraft(draft === null ? comment : null)}
+        className={`p-1.5 rounded-md transition-colors ${
+          comment
+            ? 'bg-blue-100 text-blue-700 ring-1 ring-blue-500'
+            : 'hover:bg-blue-50 text-slate-400 hover:text-blue-600'
+        }`}
+        title={comment ? `Comment: ${comment}` : 'Add a review comment'}
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill={comment ? 'currentColor' : 'none'} fillOpacity={comment ? 0.2 : 0} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+        </svg>
+      </button>
+      {draft !== null && (
+        <div className="absolute right-0 top-full z-20 mt-1 w-80 space-y-2 rounded-md border border-slate-200 bg-white p-2 text-left shadow-lg">
+          <textarea
+            autoFocus
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape')
+                setDraft(null);
+              else if (event.key === 'Enter' && (event.ctrlKey || event.metaKey))
+                saveComment();
+            }}
+            rows={3}
+            placeholder="Why does this file need attention, or what was verified?"
+            className="w-full rounded-md border border-slate-300 p-2 text-xs font-sans font-normal"
+          />
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setDraft(null)}>Cancel</Button>
+            <Button size="sm" className="h-7 text-xs" onClick={saveComment}>Save</Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -131,6 +177,8 @@ function AllVariantsFileCard({
   fileMappings,
   reviewStatusFor,
   onReviewStatusChange,
+  commentFor,
+  onCommentChange,
   onEdit,
 }: Readonly<{
   fileComp: FileComparison;
@@ -138,6 +186,8 @@ function AllVariantsFileCard({
   fileMappings: FileMapping[];
   reviewStatusFor: (variantLabel: string) => ReviewStatus;
   onReviewStatusChange: (variantLabel: string, status: ReviewStatus) => void;
+  commentFor: (variantLabel: string) => string;
+  onCommentChange: (variantLabel: string, comment: string) => void;
   onEdit: (variantIndex: number) => void;
 }>) {
   const rows = useMemo(() => alignVariants(fileComp.baseContent, fileComp.variants), [ fileComp ]);
@@ -198,7 +248,12 @@ function AllVariantsFileCard({
                         )}
                         <DiffCounts variant={variant} />
                         {variant.hasDifference
-                          ? <ReviewButtons status={reviewStatusFor(variant.variant)} onChange={(status) => onReviewStatusChange(variant.variant, status)} />
+                          ? <ReviewButtons
+                              status={reviewStatusFor(variant.variant)}
+                              onChange={(status) => onReviewStatusChange(variant.variant, status)}
+                              comment={commentFor(variant.variant)}
+                              onCommentChange={(comment) => onCommentChange(variant.variant, comment)}
+                            />
                           : <span className="text-xs text-muted-foreground">identical</span>}
                         <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => onEdit(variantIndex)}>Edit</Button>
                       </div>
@@ -243,6 +298,8 @@ function AllVariantsComparison({
   showFilter,
   statusOf,
   onReviewStatusChange,
+  commentOf,
+  onCommentChange,
   onEdit,
 }: Readonly<{
   fileComparisons: FileComparison[];
@@ -251,6 +308,8 @@ function AllVariantsComparison({
   showFilter: 'all' | 'needs-attention' | 'unchecked';
   statusOf: (path: string, variantLabel: string) => ReviewStatus;
   onReviewStatusChange: (path: string, variantLabel: string, status: ReviewStatus) => void;
+  commentOf: (path: string, variantLabel: string) => string;
+  onCommentChange: (path: string, variantLabel: string, comment: string) => void;
   onEdit: (path: string, variantIndex: number) => void;
 }>) {
   const filesWithDifferences = fileComparisons.filter((fileComp) => fileComp.variants.some((v) => v.hasDifference));
@@ -292,6 +351,8 @@ function AllVariantsComparison({
             fileMappings={fileMappings}
             reviewStatusFor={(label) => statusOf(fileComp.relativePath, label)}
             onReviewStatusChange={(label, status) => onReviewStatusChange(fileComp.relativePath, label, status)}
+            commentFor={(label) => commentOf(fileComp.relativePath, label)}
+            onCommentChange={(label, comment) => onCommentChange(fileComp.relativePath, label, comment)}
             onEdit={(variantIndex) => onEdit(fileComp.relativePath, variantIndex)}
           />
         ))}
@@ -312,6 +373,8 @@ function FileComparisonCard({
   fileMappings = [],
   reviewStatus,
   onReviewStatusChange,
+  reviewComment,
+  onReviewCommentChange,
   onEdit,
   editor,
 }: { 
@@ -321,6 +384,8 @@ function FileComparisonCard({
   fileMappings?: Array<{ baseFile: string; variantFile: string; variantLabel: string }>;
   reviewStatus: ReviewStatus;
   onReviewStatusChange: (status: ReviewStatus) => void;
+  reviewComment: string;
+  onReviewCommentChange: (comment: string) => void;
   onEdit: () => void;
   editor?: ReactNode;
 }) {
@@ -407,7 +472,7 @@ function FileComparisonCard({
                 </span>
               </div>
             )}
-            <ReviewButtons status={reviewStatus} onChange={onReviewStatusChange} />
+            <ReviewButtons status={reviewStatus} onChange={onReviewStatusChange} comment={reviewComment} onCommentChange={onReviewCommentChange} />
             {!editor && <Button variant="outline" size="sm" className="h-7 text-xs" onClick={onEdit}>Edit</Button>}
           </div>
         </div>
@@ -621,6 +686,7 @@ function ComparePage() {
   const [compareError, setCompareError] = useState<string>('');
   const [activeVariantIndex, setActiveVariantIndex] = useState(0);
   const [reviewStatuses, setReviewStatuses] = useState<Record<string, ReviewStatus>>({});
+  const [reviewComments, setReviewComments] = useState<Record<string, string>>({});
   const [showFilter, setShowFilter] = useState<'all' | 'needs-attention' | 'unchecked'>('all');
   const [viewMode, setViewMode] = useState<'pairwise' | 'all'>('pairwise');
   const [editing, setEditing] = useState<{ path: string; compareIndex: number } | null>(null);
@@ -635,12 +701,16 @@ function ComparePage() {
       try {
         // Convert array to map for easier lookup
         const statusMap: Record<string, ReviewStatus> = {};
+        const commentMap: Record<string, string> = {};
         for (const review of getReviewStatuses()) {
           // Key format: exerciseName:filePath + compareType + variantLabel
           const key = `${review.filePath}:${review.compareType}:${review.variantLabel}`;
           statusMap[key] = review.status;
+          if (review.comment)
+            commentMap[key] = review.comment;
         }
         setReviewStatuses(statusMap);
+        setReviewComments(commentMap);
       } catch (error) {
         console.error('Failed to load review statuses:', error);
       }
@@ -665,6 +735,11 @@ function ComparePage() {
     } catch (error) {
       console.error('Failed to save review status:', error);
     }
+  }, [getReviewKey, exerciseName, compareType]);
+
+  const handleReviewCommentChange = useCallback((relativePath: string, variantLabel: string, comment: string) => {
+    setReviewComments((prev) => ({ ...prev, [getReviewKey(relativePath, variantLabel)]: comment }));
+    setReviewComment({ exerciseName, filePath: relativePath, variantLabel, compareType, comment });
   }, [getReviewKey, exerciseName, compareType]);
 
   // Reset variant index and editor when switching what is compared; the loading state hides the old exercise's files
@@ -820,6 +895,8 @@ function ComparePage() {
             showFilter={showFilter}
             statusOf={(path, label) => reviewStatuses[getReviewKey(path, label)] || 'unchecked'}
             onReviewStatusChange={handleReviewStatusChange}
+            commentOf={(path, label) => reviewComments[getReviewKey(path, label)] ?? ''}
+            onCommentChange={handleReviewCommentChange}
             onEdit={editInPairwiseView}
           />
         );
@@ -911,6 +988,8 @@ function ComparePage() {
                   fileMappings={currentExercise.fileMappings || []}
                   reviewStatus={reviewStatus}
                   onReviewStatusChange={(status) => handleReviewStatusChange(fileComp.relativePath, currentVariantLabel, status)}
+                  reviewComment={reviewComments[reviewKey] ?? ''}
+                  onReviewCommentChange={(comment) => handleReviewCommentChange(fileComp.relativePath, currentVariantLabel, comment)}
                   onEdit={() => setEditing({ path: fileComp.relativePath, compareIndex: activeVariantIndex })}
                   editor={renderEditor(fileComp, activeVariantIndex)}
                 />

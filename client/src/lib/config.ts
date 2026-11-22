@@ -57,6 +57,7 @@ const fileReviewSchema = z.object({
   variantLabel: z.string(),
   compareType: compareTypeSchema,
   status: z.enum([ 'unchecked', 'correct', 'needs-attention' ]),
+  comment: z.string().optional(),
 });
 
 const multiExerciseConfigSchema = z.object({

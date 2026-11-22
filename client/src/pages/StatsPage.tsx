@@ -4,6 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Progress } from '@/components/ui/progress';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { ReportDialog } from '@/components/ReportDialog';
 import type { CompareType, FileReview } from '@/types';
 
 type CompareTypeStats = {
@@ -38,6 +39,7 @@ function StatsPage() {
   const [reviewStatuses, setReviewStatuses] = useState<FileReview[]>([]);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
+  const [showReport, setShowReport] = useState(false);
 
   // Function to fetch data (extracted so we can call it after clearing)
   const fetchData = async () => {
@@ -139,6 +141,15 @@ function StatsPage() {
             <h1 className="text-3xl font-semibold tracking-tight">Review Progress</h1>
             <p className="text-muted-foreground mt-2">Track your review progress across all exercises and comparison types.</p>
           </div>
+          <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={() => setShowReport(true)}>
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mr-2">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+              <polyline points="7 10 12 15 17 10"></polyline>
+              <line x1="12" y1="15" x2="12" y2="3"></line>
+            </svg>
+            Export Report
+          </Button>
           <Button
             variant="outline"
             size="sm"
@@ -155,8 +166,11 @@ function StatsPage() {
             </svg>
             Clear All Stats
           </Button>
+          </div>
         </div>
       </header>
+
+      {showReport && <ReportDialog onClose={() => setShowReport(false)} />}
 
       {/* Confirmation Dialog */}
       <ConfirmDialog

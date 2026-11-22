@@ -10,7 +10,7 @@ import 'fake-indexeddb/auto';
 vi.mock('@/lib/config', () => ({ getProxyBase: () => '' }));
 
 const { cloneExercise, pushRepo } = await import('@/lib/git');
-const { deleteRepoFile, discardFile, readRepoFile, repoChanges, variantChanges, writeRepoFile } = await import('@/lib/changes');
+const { deleteRepoFile, discardFile, readEditLog, readRepoFile, repoChanges, variantChanges, writeRepoFile } = await import('@/lib/changes');
 const { repoDir } = await import('@/lib/repoStore');
 
 const author = { name: 'Editor', email: 'editor@test' };
@@ -88,6 +88,11 @@ describe('pushRepo', () => {
     expect(gitCli(work, 'ls-tree', '-r', '--name-only', 'HEAD')).toBe('a.txt\nsrc/c.txt');
     expect(gitCli(work, 'log', '-1', '--format=%an %s')).toBe('Editor Fix a');
     expect(await repoChanges(repoDir(exercise, 0, 'solution'))).toEqual([]);
+    const [ entry, ...rest ] = await readEditLog(exercise, 0);
+    expect(rest).toEqual([]);
+    expect(entry).toMatchObject({ via: 'Git push (solution)', message: 'Fix a' });
+    expect(entry!.edits.map((edit) => `${edit.kind} ${edit.path}`).sort()).toEqual([ 'added src/c.txt', 'deleted b.txt', 'modified a.txt' ]);
+    expect(entry!.edits.find((edit) => edit.path === 'a.txt')!.patch).toContain('-line 2\n+edited');
   });
 
   it('merges remote changes to other lines and pushes', async () => {
@@ -105,6 +110,7 @@ describe('pushRepo', () => {
     remoteCommit('a.txt', 'line 1\nremote\nline 3\n');
     await writeRepoFile(exercise, 0, 'solution', 'a.txt', 'line 1\nlocal\nline 3\n');
     await expect(pushRepo(exercise, 0, 'solution', 'Fix a', author)).rejects.toThrow(/conflict/);
+    expect(await readEditLog(exercise, 0)).toEqual([]);
     expect(await readRepoFile(exercise, 0, 'solution', 'a.txt')).toBe('line 1\nlocal\nline 3\n');
     expect(await repoChanges(repoDir(exercise, 0, 'solution'))).toEqual([ { path: 'a.txt', kind: 'modified' } ]);
     gitCli(work, 'pull', '-q');

@@ -2,7 +2,7 @@ import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import git from 'isomorphic-git';
 import { merge } from 'node-diff3';
 import type { ExerciseConfig } from '@/types';
-import { variantChanges, type FileChange } from './changes';
+import { appendEditLog, pendingEdits, variantChanges, type FileChange } from './changes';
 import { getArtemisToken, getProxyBase } from './config';
 import { commonRoot, importZipBytes, replaceRepo, repoZipEntries, zipRepo } from './importer';
 import { fs, pathExists, readArtemisExportBytes, readArtemisMeta, repoDir, REPO_TYPES, writeArtemisMeta, type ArtemisMeta, type RepoType } from './repoStore';
@@ -254,6 +254,7 @@ export async function writeToArtemis(exercise: ExerciseConfig, variantIndex: num
     throw new Error('Only variants loaded from Artemis by URL can be written back to Artemis.');
   const { host, exerciseId } = meta;
   const changes = await variantChanges(exercise, variantIndex);
+  const edits = await pendingEdits(exercise, variantIndex);
   const serverBytes = await fetchArtemisExport(`https://${host}/api/programming/programming-exercises/${exerciseId}`);
   const server = parseArtemisExport(serverBytes);
 
@@ -300,5 +301,6 @@ export async function writeToArtemis(exercise: ExerciseConfig, variantIndex: num
   await Promise.all(REPO_TYPES.filter((repoType) => server.repos[repoType]).map((repoType) =>
     replaceRepo(repoDir(exercise, variantIndex, repoType), [ ...applyPlan(serverFiles[repoType], plans[repoType]) ])));
   await writeArtemisMeta(exercise, variantIndex, { ...meta, problemStatement }, serverBytes);
+  await appendEditLog(exercise, variantIndex, 'Write to Artemis', edits);
   return problemStatement;
 }

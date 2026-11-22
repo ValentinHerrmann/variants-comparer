@@ -22,6 +22,7 @@ export type FileReview = {
   variantLabel: string;
   compareType: CompareType;
   status: ReviewStatus;
+  comment?: string;
 };
 
 export type ExerciseConfig = {

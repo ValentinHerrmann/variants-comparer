@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { buildArtemisZip, writeToArtemis } from '@/lib/artemis';
-import { commitAll, discardFile, repoRemoteUrl, variantChanges, type FileChange, type VariantChanges } from '@/lib/changes';
+import { appendEditLog, commitAll, discardFile, pendingEdits, repoRemoteUrl, variantChanges, type FileChange, type VariantChanges } from '@/lib/changes';
 import { getCommitAuthor, setCommitAuthor } from '@/lib/config';
 import { pushRepo } from '@/lib/git';
 import { zipRepo } from '@/lib/importer';
@@ -84,6 +84,7 @@ export function PendingChangesPanel({ exercise, refreshToken, onWritten, onProbl
 
   const downloadRepo = (index: number, repoType: RepoType) => run(async () => {
     downloadFile(`${fileBase(index)}-${repoType}.zip`, await zipRepo(exercise, index, repoType), 'application/zip');
+    await appendEditLog(exercise, index, `ZIP download (${repoType})`, await pendingEdits(exercise, index, [ repoType ], false));
     await commitAll(repoDir(exercise, index, repoType), 'Downloaded as ZIP');
     return `${labelOf(index)} – ${repoType}: ZIP downloaded.`;
   });
@@ -92,6 +93,7 @@ export function PendingChangesPanel({ exercise, refreshToken, onWritten, onProbl
   const downloadArtemisZip = (index: number, meta: ArtemisMeta) => run(async () => {
     downloadFile(`${fileBase(index)}-artemis-export.zip`, await buildArtemisZip(exercise, index), 'application/zip');
     if (meta.via === 'zip') {
+      await appendEditLog(exercise, index, 'Artemis ZIP download', await pendingEdits(exercise, index));
       await Promise.all(REPO_TYPES.map((repoType) => commitAll(repoDir(exercise, index, repoType), 'Downloaded as Artemis ZIP')));
       await writeArtemisMeta(exercise, index, { ...meta, problemStatement: exercise.variants[index]?.markdown ?? '' });
     }

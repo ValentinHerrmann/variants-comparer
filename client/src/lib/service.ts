@@ -137,14 +137,28 @@ export function getReviewStatuses(): FileReview[] {
   return readConfig().reviewStatuses;
 }
 
-export function setReviewStatus(review: { exerciseName: string; filePath: string; variantLabel: string; compareType: CompareType; status: ReviewStatus }) {
+type ReviewTarget = { exerciseName: string; filePath: string; variantLabel: string; compareType: CompareType };
+
+/*  Store status and comment of a file review; an unchecked review without comment is dropped  */
+function updateReview(target: ReviewTarget, patch: { status?: ReviewStatus; comment?: string }) {
   const config = readConfig();
-  const fullKey = `${review.exerciseName}:${review.filePath}`;
-  const matches = (r: FileReview) => r.variantLabel === review.variantLabel && r.compareType === review.compareType;
-  const reviewStatuses = config.reviewStatuses.filter((r) => !(matches(r) && r.filePath === fullKey));
-  if (review.status !== 'unchecked')
-    reviewStatuses.push({ filePath: fullKey, variantLabel: review.variantLabel, compareType: review.compareType, status: review.status });
+  const fullKey = `${target.exerciseName}:${target.filePath}`;
+  const matches = (r: FileReview) => r.filePath === fullKey && r.variantLabel === target.variantLabel && r.compareType === target.compareType;
+  const current = config.reviewStatuses.find(matches);
+  const status  = patch.status ?? current?.status ?? 'unchecked';
+  const comment = (patch.comment ?? current?.comment ?? '').trim();
+  const reviewStatuses = config.reviewStatuses.filter((r) => !matches(r));
+  if (status !== 'unchecked' || comment)
+    reviewStatuses.push({ filePath: fullKey, variantLabel: target.variantLabel, compareType: target.compareType, status, ...(comment ? { comment } : {}) });
   writeConfig({ ...config, reviewStatuses });
+}
+
+export function setReviewStatus(review: ReviewTarget & { status: ReviewStatus }) {
+  updateReview(review, { status: review.status });
+}
+
+export function setReviewComment(review: ReviewTarget & { comment: string }) {
+  updateReview(review, { comment: review.comment });
 }
 
 export function clearReviewStatuses() {
@@ -220,7 +234,7 @@ export async function getStats() {
       variants: exercise.variants.map((v) => v.label),
       byCompareType,
       byVariant,
-      totalReviewed: exerciseReviews.length,
+      totalReviewed: exerciseReviews.filter((r) => r.status !== 'unchecked').length,
     };
   }));
 }
